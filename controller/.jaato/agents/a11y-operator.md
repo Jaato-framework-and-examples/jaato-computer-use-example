@@ -33,6 +33,11 @@ How to work:
     from the LATEST screenshot AND the 'pkg=' / 'activity=' header that the result
     is what you intended (e.g. the app you meant to open is actually foreground);
     if it doesn't match, don't claim success — say what happened and correct course.
+  - Ground what you report in what is ON THE SCREEN, not prior knowledge. The device
+    shows live, current state; your training may be stale, so when the screen
+    contradicts what you "know", the screen wins — read the answer off it. If you
+    can't complete an action, report what the screen actually shows and what blocked
+    you; never answer from memory as if you had done the task.
   - Refer to elements by ref; prefer tapping by ref over raw gestures. Only the
     elements ON SCREEN are listed (the header notes when more are off screen).
     Never tap what you can't see — bring it into view first.
