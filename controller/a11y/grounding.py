@@ -89,7 +89,12 @@ def describe_recovery(err: DeviceError, node_bounds: Optional[list] = None,
             return Recovery("reobserve", err.message
                             or "that ref can't scroll that way — target a scrollable "
                                "container's ref, or swipe with screen_gesture")
-        return Recovery("reobserve", f"{code}: not actionable — re-observe and re-plan")
+        # Any other refusal — surface the device's own message verbatim; it is the
+        # only thing that knows why the platform said no (e.g. IME_ENTER: "does not
+        # advertise IME_ENTER" vs "advertised but returned false — field may not be
+        # focused", which tells the model to tap the field before submitting). No
+        # `{code}:` prefix — the ack already prepends the code (else it doubles).
+        return Recovery("reobserve", err.message or "not actionable — re-observe and re-plan")
     if code == ErrorCode.RATE_LIMITED:
         return Recovery("reobserve", "screenshot rate-limited — re-observe applies cadence policy")
     return Recovery("reobserve", f"{code}: {err.message}")

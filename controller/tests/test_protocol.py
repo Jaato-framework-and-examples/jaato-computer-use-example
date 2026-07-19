@@ -168,6 +168,15 @@ def test_recovery_classification():
         DeviceError(ErrorCode.NOT_ACTIONABLE, "already at scroll extent"),
         node_bounds=[0, 0, 40, 40], action=Action.scroll_dir("down"))
     assert s2.reason == "already at scroll extent"
+    # NOT_ACTIONABLE on IME_ENTER surfaces the device's reason verbatim (e.g. "not
+    # focused") so the model knows to tap the field before submitting — a generic
+    # hint would hide it. And no doubled `NOT_ACTIONABLE:` prefix (the ack adds it).
+    i = grounding.describe_recovery(
+        DeviceError(ErrorCode.NOT_ACTIONABLE,
+                    "IME_ENTER advertised but returned false — field may not be focused"),
+        action=Action.ime_enter())
+    assert i.next == "reobserve" and "may not be focused" in i.reason
+    assert not i.reason.startswith("NOT_ACTIONABLE")
 
 
 def test_scroll_dir_maps_to_directional_actions():
