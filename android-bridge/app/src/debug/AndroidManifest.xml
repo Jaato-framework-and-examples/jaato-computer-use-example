@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY overlay. Enables cleartext (ws://) so the app can talk to a local e2e daemon
+  over `adb reverse` without TLS certs. The release build never sees this — it stays
+  wss-only per PROTOCOL §13.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic" />
+</manifest>

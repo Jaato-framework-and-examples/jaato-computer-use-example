@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A stylised "bridge" glyph inside the adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#7CE7B0"
+        android:pathData="M30,42 L30,72 L36,72 L36,58 C36,52 42,50 48,50 L60,50 C66,50 72,52 72,58 L72,72 L78,72 L78,42 L72,42 L72,48 C68,45 63,44 58,44 L50,44 C45,44 40,45 36,48 L36,42 Z" />
+    <path
+        android:fillColor="#7CE7B0"
+        android:pathData="M50,58 h8 v14 h-8 z" />
+</vector>

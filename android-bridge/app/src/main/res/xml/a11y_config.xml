@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Device design §2.1. We subscribe to a SUPERSET of event types; SettleConfig.eventMask
+  decides at runtime which ones count. The manifest is the mechanism envelope; the daemon
+  owns the policy.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled|typeViewTextChanged|typeViewFocused"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:canTakeScreenshot="true"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:notificationTimeout="100"
+    android:description="@string/service_description"
+    android:settingsActivity="com.jaato.a11ybridge.MainActivity" />

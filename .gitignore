@@ -1,0 +1,33 @@
+# --- Android / Gradle ---
+.gradle/
+build/
+*/build/
+**/build/
+local.properties
+*.iml
+.idea/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# --- Runtime / session state: NEVER publish ---
+# Framework workspace state, agent transcripts, and anything captured from a real device.
+.jaato/
+.claude/
+captures/
+*.webp
+*.jpg
+*.jpeg
+!docs/**/*.png
+
+# --- OS ---
+.DS_Store
+Thumbs.db

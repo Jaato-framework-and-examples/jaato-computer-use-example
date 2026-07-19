@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">jaato a11y bridge</string>
+    <string name="service_label">jaato a11y bridge</string>
+    <string name="service_description">Relays the on-screen accessibility tree and screenshots to the jaato daemon, and executes daemon-directed actions. Grants full device control to the connected daemon.</string>
+</resources>
