@@ -3,6 +3,7 @@ package com.jaato.a11ybridge
 import com.jaato.a11ybridge.observe.Pruner
 import com.jaato.a11ybridge.observe.RawNode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -85,4 +86,38 @@ class PrunerTest {
         val flags = Pruner.prune(raw)[0].flags
         assertEquals(listOf("clickable", "enabled", "focusable", "visible"), flags)
     }
+
+    @Test
+    fun `vertical feed advertises only down-up, with the exact agreed strings`() {
+        // This is the case that motivated the flags: a vertical feed and a horizontal pager
+        // look identical in the tree (both just "scrollable") until the axes are exposed.
+        val flags = Pruner.prune(listOf(scroller(down = true, up = true)))[0].flags
+        assertEquals(listOf("scrollable", "scrollableDown", "scrollableUp", "enabled", "visible"), flags)
+    }
+
+    @Test
+    fun `horizontal pager advertises only left-right`() {
+        val flags = Pruner.prune(listOf(scroller(left = true, right = true)))[0].flags
+        assertEquals(listOf("scrollable", "scrollableLeft", "scrollableRight", "enabled", "visible"), flags)
+    }
+
+    @Test
+    fun `a scrollable advertising no direction emits no directional tokens`() {
+        // Legacy node exposing only FORWARD/BACKWARD: still "scrollable", no axis claimed.
+        val flags = Pruner.prune(listOf(scroller()))[0].flags
+        assertEquals(listOf("scrollable", "enabled", "visible"), flags)
+        assertFalse(flags.any { it.startsWith("scrollable") && it != "scrollable" })
+    }
+
+    private fun scroller(
+        down: Boolean = false, up: Boolean = false,
+        left: Boolean = false, right: Boolean = false,
+    ) = RawNode(
+        id = 0, parentId = null, cls = "android.widget.ScrollView", viewId = null,
+        text = null, desc = "list", bounds = intArrayOf(0, 0, 100, 100),
+        clickable = false, longClickable = false, scrollable = true, editable = false,
+        checkable = false, checked = false, enabled = true, focusable = false, focused = false,
+        visible = true, password = false, selected = false,
+        scrollableDown = down, scrollableUp = up, scrollableLeft = left, scrollableRight = right,
+    )
 }

@@ -29,6 +29,13 @@ data class RawNode(
     val visible: Boolean,
     val password: Boolean,
     val selected: Boolean,
+    // Axis-explicit scrollability, read straight from getActionList(). Purely mechanical:
+    // "does this node advertise ACTION_SCROLL_<DIR>". Lets the daemon tell two
+    // identical-looking scrollables apart instead of probing to find out.
+    val scrollableDown: Boolean = false,
+    val scrollableUp: Boolean = false,
+    val scrollableLeft: Boolean = false,
+    val scrollableRight: Boolean = false,
 )
 
 /**
@@ -46,6 +53,13 @@ object Pruner {
         if (n.clickable) add("clickable")
         if (n.longClickable) add("longClickable")
         if (n.scrollable) add("scrollable")
+        // Axis-explicit companions to `scrollable`, emitted iff the node advertises the
+        // matching ACTION_SCROLL_<DIR>. FORWARD/BACKWARD get no token: they are ambiguous
+        // by nature and `scrollable` already says "this scrolls at all".
+        if (n.scrollableDown) add("scrollableDown")
+        if (n.scrollableUp) add("scrollableUp")
+        if (n.scrollableLeft) add("scrollableLeft")
+        if (n.scrollableRight) add("scrollableRight")
         if (n.editable) add("editable")
         if (n.checkable) add("checkable")
         if (n.checked) add("checked")

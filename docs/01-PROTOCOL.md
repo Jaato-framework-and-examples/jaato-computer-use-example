@@ -320,7 +320,9 @@ A **Snapshot** is the pruned, serialized tree returned by `observe` (and referen
 ```
 
 - **`ref`** — ephemeral integer, unique **within this snapshotVersion only**. Used for set-of-marks and for `{ref,snapshotVersion}` selectors. Never reuse across versions; never persist.
-- **`flags`** — compact string set drawn from: `clickable longClickable scrollable editable checkable checked enabled focusable focused visible password selected`. Absent flags are false.
+- **`flags`** — compact string set drawn from: `clickable longClickable scrollable scrollableDown scrollableUp scrollableLeft scrollableRight editable checkable checked enabled focusable focused visible password selected`. Absent flags are false.
+  - The four `scrollable<Dir>` tokens are **axis-explicit companions** to `scrollable`, emitted iff the node advertises the matching `ACTION_SCROLL_<DIR>` — a mechanical `getActionList()` read, no inference. They exist because a vertical feed and a horizontal pager are indistinguishable when both report only `scrollable`, forcing the daemon to guess which node to scroll (and, in practice, to page the tabs sideways instead of scrolling the feed). `SCROLL_FORWARD`/`BACKWARD` get no token: they are orientation-agnostic by nature, and `scrollable` already means "this scrolls at all".
+  - Purely additive: a device that omits them is simply a device that does not report axes. No version gate.
 - **`bounds`** — `[left, top, right, bottom]` in screen pixels (`getBoundsInScreen`).
 - **`parent`** — `ref` of the parent *in the pruned tree* (structural hint for disambiguation), or omitted for roots.
 - **`screenshotRef`** — correlation id of the bundled binary frame, if `includeScreenshot` was set.

@@ -2,11 +2,12 @@
 """jaato-a11y-bridge controller — the daemon-side "mind".
 
 Stands up the device-facing WS listener, connects to the jaato daemon with the
-``a11y-controller`` profile (openrouter / gemini-2.5-flash vision), registers the
-``screen.*`` host tools, and runs the controller-driven loop: each turn it pushes
-a set-of-marks screenshot + pruned tree to the agent, the agent calls exactly one
-``screen.*`` tool, the controller executes it on the real device (act -> settle ->
-recover -> re-observe), and the next turn shows the updated screen.
+``a11y-controller`` profile (doubleword / Qwen3-VL vision), registers the
+``screen.*`` host tools, and runs the computer-use loop: each turn it pushes a
+set-of-marks screenshot + pruned tree to the agent, and the agent drives a full
+multi-action sequence — every ``screen.*`` tool executes on the device (act ->
+settle -> recover -> re-observe) and returns the fresh set-of-marks screenshot as
+its own tool result, so the model sees each effect and acts again within the turn.
 
 Interaction is **mid-run steering**: the agent drives autonomously toward the
 standing task, but you can type a new instruction or correction at any time and
@@ -47,7 +48,7 @@ PROFILE = "a11y-controller"
 # How long to wait for the device to dial back in after a drop before giving up
 # and surfacing "device unavailable" (a network flap reconnects in seconds).
 RECONNECT_TIMEOUT_S = 90.0
-# The operator persona (tools + one-action-per-turn discipline) lives in
+# The operator persona (tools + when-to-act judgment) lives in
 # .jaato/agents/a11y-operator.md and is loaded as the session's *system*
 # instructions — not injected into the first user turn.
 AGENT = "a11y-operator"

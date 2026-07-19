@@ -81,6 +81,10 @@ class TreeWalker(private val service: AccessibilityService) {
         val id = out.size
         val r = Rect()
         node.getBoundsInScreen(r)
+        // The action list ships with the already-fetched node, so this costs no extra IPC.
+        val actions = node.actionList
+        fun advertises(action: AccessibilityNodeInfo.AccessibilityAction): Boolean =
+            actions.any { it.id == action.id }
         out.add(
             RawNode(
                 id = id,
@@ -102,6 +106,10 @@ class TreeWalker(private val service: AccessibilityService) {
                 visible = node.isVisibleToUser,
                 password = node.isPassword,
                 selected = node.isSelected,
+                scrollableDown = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN),
+                scrollableUp = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP),
+                scrollableLeft = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT),
+                scrollableRight = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT),
             )
         )
         if (retain != null) retain[id] = node
