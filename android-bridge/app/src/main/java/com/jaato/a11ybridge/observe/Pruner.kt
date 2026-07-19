@@ -36,6 +36,8 @@ data class RawNode(
     val scrollableUp: Boolean = false,
     val scrollableLeft: Boolean = false,
     val scrollableRight: Boolean = false,
+    /** Advertises ACTION_IME_ENTER — this field can submit itself (Search/Go/Send/Done). */
+    val imeEnter: Boolean = false,
 )
 
 /**
@@ -61,6 +63,9 @@ object Pruner {
         if (n.scrollableLeft) add("scrollableLeft")
         if (n.scrollableRight) add("scrollableRight")
         if (n.editable) add("editable")
+        // Companion to `editable`: this field can submit itself via its own editor action.
+        // Same rationale as the scroll axes — otherwise the model must guess which field goes.
+        if (n.imeEnter) add("imeEnter")
         if (n.checkable) add("checkable")
         if (n.checked) add("checked")
         if (n.enabled) add("enabled")

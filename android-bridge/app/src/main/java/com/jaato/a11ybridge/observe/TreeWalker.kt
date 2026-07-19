@@ -110,6 +110,7 @@ class TreeWalker(private val service: AccessibilityService) {
                 scrollableUp = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP),
                 scrollableLeft = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT),
                 scrollableRight = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT),
+                imeEnter = advertises(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER),
             )
         )
         if (retain != null) retain[id] = node

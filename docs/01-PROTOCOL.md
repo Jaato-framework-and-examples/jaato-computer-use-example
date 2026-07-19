@@ -323,6 +323,7 @@ A **Snapshot** is the pruned, serialized tree returned by `observe` (and referen
 - **`flags`** — compact string set drawn from: `clickable longClickable scrollable scrollableDown scrollableUp scrollableLeft scrollableRight editable checkable checked enabled focusable focused visible password selected`. Absent flags are false.
   - The four `scrollable<Dir>` tokens are **axis-explicit companions** to `scrollable`, emitted iff the node advertises the matching `ACTION_SCROLL_<DIR>` — a mechanical `getActionList()` read, no inference. They exist because a vertical feed and a horizontal pager are indistinguishable when both report only `scrollable`, forcing the daemon to guess which node to scroll (and, in practice, to page the tabs sideways instead of scrolling the feed). `SCROLL_FORWARD`/`BACKWARD` get no token: they are orientation-agnostic by nature, and `scrollable` already means "this scrolls at all".
   - Purely additive: a device that omits them is simply a device that does not report axes. No version gate.
+  - **`imeEnter`** is the same idea for submission: emitted iff the node advertises `ACTION_IME_ENTER`, i.e. this field can submit itself. Without it the daemon must type and then hunt for a Go/Search button; with it, the submittable field is identifiable directly.
 - **`bounds`** — `[left, top, right, bottom]` in screen pixels (`getBoundsInScreen`).
 - **`parent`** — `ref` of the parent *in the pruned tree* (structural hint for disambiguation), or omitted for roots.
 - **`screenshotRef`** — correlation id of the bundled binary frame, if `includeScreenshot` was set.
@@ -396,6 +397,7 @@ Carried in `act.action` with the shape it requires:
 | `SET_TEXT` | `text` | `ACTION_SET_TEXT` + `ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE` |
 | `SCROLL_FORWARD` | — | `ACTION_SCROLL_FORWARD` |
 | `SCROLL_BACKWARD` | — | `ACTION_SCROLL_BACKWARD` |
+| `IME_ENTER` | — | `ACTION_IME_ENTER` (API 30+) |
 | `FOCUS` | — | `ACTION_FOCUS` |
 | `GESTURE` | `gesture` | `dispatchGesture(StrokeDescription)` |
 | `GLOBAL` | `global` | `performGlobalAction(...)` |
@@ -409,7 +411,9 @@ Carried in `act.action` with the shape it requires:
 
 `global` ∈ `BACK | HOME | RECENTS | NOTIFICATIONS | QUICK_SETTINGS | LOCK_SCREEN`.
 
-**Preference contract (daemon-side policy, stated here for both ends to agree):** prefer semantic actions (`CLICK`/`SET_TEXT`/`SCROLL_*`) because they target the node and survive minor layout shift; fall back to `GESTURE` only when the node is visible but `NOT_ACTIONABLE`. `SET_TEXT` is preferred over synthesizing per-character key events.
+**`IME_ENTER`** targets the editable node itself (same Selector shape as `SET_TEXT`) and fires *that field's own* editor action — Search / Go / Send / Done, per its `imeOptions`. It is the **only** way this device can submit a field: an AccessibilityService cannot inject key events (no `INJECT_EVENTS` permission) and `dispatchGesture` is touch-only, so `KEYCODE_ENTER` is not available to fall back on. Typical sequence is `CLICK`/`FOCUS` → `SET_TEXT` → `IME_ENTER` on the same ref; a field with no active input connection may refuse the action, which is reported, never worked around.
+
+**Preference contract (daemon-side policy, stated here for both ends to agree):** prefer semantic actions (`CLICK`/`SET_TEXT`/`SCROLL_*`/`IME_ENTER`) because they target the node and survive minor layout shift; fall back to `GESTURE` only when the node is visible but `NOT_ACTIONABLE`. `SET_TEXT` is preferred over synthesizing per-character key events.
 
 ---
 

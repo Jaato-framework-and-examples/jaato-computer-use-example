@@ -36,6 +36,14 @@ class Actuator(private val service: AccessibilityService) {
             "SCROLL_UP" -> scroll(node, AccessibilityAction.ACTION_SCROLL_UP.id, "SCROLL_UP")
             "SCROLL_LEFT" -> scroll(node, AccessibilityAction.ACTION_SCROLL_LEFT.id, "SCROLL_LEFT")
             "SCROLL_RIGHT" -> scroll(node, AccessibilityAction.ACTION_SCROLL_RIGHT.id, "SCROLL_RIGHT")
+            // Fires the field's OWN editor action (Search / Go / Send / Done, per its imeOptions).
+            // This is the only way an AccessibilityService can submit: it cannot inject key
+            // events (no INJECT_EVENTS permission), and dispatchGesture is touch-only, so
+            // KEYCODE_ENTER was never available. API 30+, which is our minSdk.
+            "IME_ENTER" -> advertisedAction(
+                node, AccessibilityAction.ACTION_IME_ENTER.id, "IME_ENTER",
+                refusedHint = "field refused the editor action; it may not be focused",
+            )
             "FOCUS" -> semantic(node, AccessibilityNodeInfo.ACTION_FOCUS)
             "GESTURE" -> gesture(args.gesture ?: err("GESTURE requires a gesture"))
             "GLOBAL" -> global(args.global ?: err("GLOBAL requires a global action name"))
@@ -43,23 +51,30 @@ class Actuator(private val service: AccessibilityService) {
         }
     }
 
+    private fun scroll(node: AccessibilityNodeInfo?, actionId: Int, name: String) =
+        advertisedAction(node, actionId, name, refusedHint = "already at scroll extent")
+
     /**
-     * Scroll actions, with the one distinction the model actually needs. `performAction` returns
-     * false BOTH when a node does not support the action AND when it supports it but is already
-     * at the scroll extent — very different meanings ("try another ref" vs "you've hit the end").
+     * Perform an action the node must *advertise*, keeping the one distinction the model needs.
+     * `performAction` returns false BOTH when a node does not support the action AND when it
+     * supports it but refused — very different meanings ("try another ref" vs "that didn't take").
      * `getActionList()` tells them apart deterministically, so we report which one it was.
-     * Both surface as NOT_ACTIONABLE (§7); the device still never falls back on its own.
+     * Both surface as NOT_ACTIONABLE (§7); the device never falls back on its own.
      */
-    private fun scroll(node: AccessibilityNodeInfo?, actionId: Int, name: String) {
-        val target = node ?: throw DeviceError(ErrorCode.NOT_FOUND, "no node to scroll")
-        val advertised = target.actionList.any { it.id == actionId }
-        if (!advertised) {
+    private fun advertisedAction(
+        node: AccessibilityNodeInfo?,
+        actionId: Int,
+        name: String,
+        refusedHint: String,
+    ) {
+        val target = node ?: throw DeviceError(ErrorCode.NOT_FOUND, "no node to act on")
+        if (target.actionList.none { it.id == actionId }) {
             throw DeviceError(ErrorCode.NOT_ACTIONABLE, "node does not advertise $name")
         }
         if (!target.performAction(actionId)) {
             throw DeviceError(
                 ErrorCode.NOT_ACTIONABLE,
-                "$name advertised but returned false (already at scroll extent)",
+                "$name advertised but returned false ($refusedHint)",
             )
         }
     }

@@ -109,6 +109,28 @@ class PrunerTest {
         assertFalse(flags.any { it.startsWith("scrollable") && it != "scrollable" })
     }
 
+    @Test
+    fun `a submittable search field advertises imeEnter next to editable`() {
+        // Lets the model pick the field that can submit itself, instead of typing and then
+        // hunting for a Go button (the failure that motivated IME_ENTER).
+        val raw = listOf(
+            RawNode(
+                id = 0, parentId = null, cls = "android.widget.EditText",
+                viewId = "com.android.chrome:id/url_bar", text = "", desc = "Search or type URL",
+                bounds = intArrayOf(0, 0, 100, 20),
+                clickable = true, longClickable = false, scrollable = false, editable = true,
+                checkable = false, checked = false, enabled = true, focusable = true,
+                focused = true, visible = true, password = false, selected = false,
+                imeEnter = true,
+            )
+        )
+        val flags = Pruner.prune(raw)[0].flags
+        assertEquals(
+            listOf("clickable", "editable", "imeEnter", "enabled", "focusable", "focused", "visible"),
+            flags,
+        )
+    }
+
     private fun scroller(
         down: Boolean = false, up: Boolean = false,
         left: Boolean = false, right: Boolean = false,
