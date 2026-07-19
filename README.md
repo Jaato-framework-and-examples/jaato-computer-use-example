@@ -20,22 +20,27 @@ guesses).
 
 ```
 docs/
-  01-PROTOCOL.md        the wire contract — single source of truth for both halves
-  02-DEVICE_DESIGN.md   how the Android device half implements that contract
-android-bridge/         Android AccessibilityService (Kotlin) — the device half
+  01-PROTOCOL.md              the wire contract — single source of truth for every half
+  02-DEVICE_DESIGN.md         how the Android device half implements that contract
+  04-DEVICE_DESIGN-WINDOWS.md a Windows device half against the same wire (design only)
+android-bridge/               Android AccessibilityService (Kotlin) — the device half
+controller/                   the LLM controller (Python) — the mind
 tools/
-  e2e_daemon.py         minimal Python harness: enough "mind" to exercise the wire by hand
-controller/             the real LLM controller (landing separately)
+  e2e_daemon.py               minimal harness: enough "mind" to exercise the wire by hand
 ```
+
+The two halves were built concurrently by separate agents negotiating the wire between them —
+which is why the contract is unusually explicit about who owns which decision.
 
 ## Status
 
 | Component | State |
 |---|---|
-| Wire protocol (`docs/01-PROTOCOL.md`) | stable; extended in-repo with a `windows` verb |
+| Wire protocol (`docs/01-PROTOCOL.md`) | stable; extended in-repo with a `windows` verb + directional scrolls |
 | Android bridge (`android-bridge/`) | complete, unit-tested, **verified end-to-end on real hardware** (Android 16 / SDK 36) |
-| e2e harness (`tools/e2e_daemon.py`) | working; drives the full loop by hand |
-| LLM controller (`controller/`) | developed alongside; lands separately |
+| LLM controller (`controller/`) | complete, unit-tested; drives a real device via vision + set-of-marks |
+| e2e harness (`tools/e2e_daemon.py`) | working; drives the full loop by hand, no model |
+| Windows device (`docs/04-…`) | **design only** — not implemented; assumptions marked for validation |
 
 The full canonical loop is exercised on a physical device: `configure → observe → act → settled`,
 plus screenshot capture with on-device redaction, foreground tracking, and reconnect recovery.
