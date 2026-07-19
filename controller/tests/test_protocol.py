@@ -186,6 +186,12 @@ def test_scroll_dir_maps_to_directional_actions():
             raise AssertionError(f"scroll_dir({bad!r}) should have raised")
 
 
+def test_ime_enter_action():
+    a = Action.ime_enter()
+    assert a.action == "IME_ENTER" and a.text is None and a.gesture is None
+    assert Action("IME_ENTER").action == "IME_ENTER"  # accepted by Action() validation
+
+
 # --- annotate ---------------------------------------------------------------
 
 def test_tree_text_lists_refs():
@@ -214,6 +220,26 @@ def test_tree_text_collapses_scroll_axes():
     assert "scrollable:down,up" in txt      # feed (ref 1)
     assert "scrollableDown" not in txt      # raw axis tokens folded away
     assert "scrollableLeft" not in txt
+
+
+def test_tree_text_marks_submittable_field():
+    # imeEnter (the field advertises ACTION_IME_ENTER) folds into `editable:submit`
+    # so the model knows which field to screen_submit after typing — vs a plain
+    # editable that must be submitted some other way.
+    snap = Snapshot.parse({
+        "snapshotVersion": 3, "pkg": "com.x", "activity": ".Main",
+        "screen": {"width": 1000, "height": 2000},
+        "nodes": [
+            {"ref": 0, "cls": "E", "bounds": [0, 0, 500, 80],
+             "flags": ["editable", "imeEnter", "focusable", "visible"]},
+            {"ref": 1, "cls": "E", "bounds": [0, 90, 500, 170],
+             "flags": ["editable", "visible"]},
+        ],
+    })
+    txt = tree_text(Observation(snapshot=snap, image=None))
+    assert "editable:submit" in txt   # ref 0 advertises submit
+    assert "imeEnter" not in txt       # raw token folded away
+    assert "[1] E '' [0, 90, 500, 170] <editable,visible>" in txt  # ref 1 plain editable
 
 
 def test_set_of_marks_draws_on_real_png():

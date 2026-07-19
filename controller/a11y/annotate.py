@@ -113,15 +113,24 @@ _SCROLL_DIR_FLAGS = {
 
 
 def _render_flags(flags: List[str]) -> str:
-    """Collapse the axis-explicit scroll tokens (``scrollableDown/Up/Left/Right``,
-    01-PROTOCOL §8) into a compact ``scrollable:down,up`` so the model can tell a
-    vertical feed from a horizontal pager at a glance — two nodes that otherwise
-    read identically as ``scrollable``. Non-scroll flags pass through unchanged, in
-    order; a device that omits the axis tokens just renders a bare ``scrollable``."""
+    """Fold the capability-companion tokens into their parent so the model can read
+    an element's affordances at a glance (01-PROTOCOL §8):
+    - ``scrollableDown/Up/Left/Right`` -> ``scrollable:down,up`` — tells a vertical
+      feed from a horizontal pager, two nodes that otherwise read identically.
+    - ``imeEnter`` -> ``editable:submit`` — marks which field can be submitted
+      (screen_submit) after typing, instead of the model guessing.
+    Other flags pass through unchanged, in order; a device that omits the companion
+    tokens just renders a bare ``scrollable`` / ``editable``."""
     dirs = [_SCROLL_DIR_FLAGS[f] for f in flags if f in _SCROLL_DIR_FLAGS]
+    has_submit = "imeEnter" in flags
     out: List[str] = []
     for f in flags:
-        if f in _SCROLL_DIR_FLAGS:
-            continue  # folded into the scrollable token
-        out.append(f"scrollable:{','.join(dirs)}" if (f == "scrollable" and dirs) else f)
+        if f in _SCROLL_DIR_FLAGS or f == "imeEnter":
+            continue  # folded into scrollable / editable
+        if f == "scrollable" and dirs:
+            out.append(f"scrollable:{','.join(dirs)}")
+        elif f == "editable" and has_submit:
+            out.append("editable:submit")
+        else:
+            out.append(f)
     return ",".join(out)

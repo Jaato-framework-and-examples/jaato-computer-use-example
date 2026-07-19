@@ -61,6 +61,11 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
         ack = await controller.act_ref(int(args["ref"]), Action.scroll_dir(str(args["direction"])))
         return _screen_result(controller, ack)
 
+    async def screen_submit(args: dict) -> dict:
+        from .protocol import Action
+        ack = await controller.act_ref(int(args["ref"]), Action.ime_enter())
+        return _screen_result(controller, ack)
+
     async def screen_back(args: dict) -> dict:
         return _screen_result(controller, await controller.global_action("BACK"))
 
@@ -123,6 +128,18 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
                                                         "enum": ["down", "up", "left", "right"]}},
                            "required": ["ref", "direction"]},
             "handler": screen_scroll,
+        },
+        {
+            "name": "screen_submit",
+            "description": "Submit an editable field by firing its keyboard action (Search/Go/Send/"
+                           "Done) — use this to RUN a search or send after screen_type. Focus the "
+                           "field first (tap it), then type, then submit the same ref. Fields that "
+                           "support this show `editable:submit` in the tree; a NOT_ACTIONABLE means "
+                           "the field doesn't advertise submit or isn't focused.",
+            "parameters": {"type": "object",
+                           "properties": {"ref": {"type": "integer"}},
+                           "required": ["ref"]},
+            "handler": screen_submit,
         },
         {"name": "screen_back", "description": "Press the system Back button.",
          "parameters": {"type": "object", "properties": {}}, "handler": screen_back},

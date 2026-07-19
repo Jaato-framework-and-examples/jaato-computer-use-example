@@ -216,6 +216,10 @@ _ACTIONS = frozenset(
      # MAY pick is daemon policy, not a reason to amputate the wire (01-PROTOCOL).
      "SCROLL_FORWARD", "SCROLL_BACKWARD",
      "SCROLL_DOWN", "SCROLL_UP", "SCROLL_LEFT", "SCROLL_RIGHT",
+     # Fire the focused editable's own editor action (Search/Go/Send/Done per its
+     # imeOptions) -> ACTION_IME_ENTER. The a11y-native way to submit a typed field
+     # (key injection isn't available to an a11y service); needs the field focused.
+     "IME_ENTER",
      "FOCUS", "GESTURE", "GLOBAL"}
 )
 _SCROLL_DIRECTIONS = {
@@ -277,6 +281,14 @@ class Action:
         except KeyError:
             raise ValueError(f"unknown scroll direction: {direction!r} "
                              f"(expected one of {sorted(_SCROLL_DIRECTIONS)})")
+
+    @classmethod
+    def ime_enter(cls) -> "Action":
+        """Submit the focused editable via its editor action -> ACTION_IME_ENTER.
+        Targets the editable ref (same shape as SET_TEXT). The field must be focused
+        first (tap it, then SET_TEXT), so the reliable sequence is tap -> type ->
+        submit; the device never auto-focuses (that would be a hidden fallback)."""
+        return cls("IME_ENTER")
 
     @classmethod
     def global_(cls, name: str) -> "Action":
