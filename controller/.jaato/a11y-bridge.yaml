@@ -1,0 +1,35 @@
+# Device-facing bridge config (client-side; distinct from the LLM profile).
+# The device (com.jaato.a11ybridge) dials THIS listener; the LLM provider/model
+# live in .jaato/profiles/a11y-controller.yaml.
+
+listen:
+  host: 0.0.0.0
+  port: 8765
+  path: /a11y
+  # Auth (01 §13.1). Provide exactly one of:
+  #   token:      "<literal bearer token>"
+  #   token_env:  NAME_OF_ENV_VAR_HOLDING_THE_TOKEN
+  #   unsafe_no_auth: true   (dev only — VPN/loopback; logs a warning)
+  unsafe_no_auth: true
+
+device:
+  # REQUIRED, non-empty: scopes both observation and action (01 §13.3).
+  # An empty scope keeps the device fail-closed (nothing observable/actable).
+  # Set to the package(s) under test, e.g. ["com.android.settings"].
+  package_scope: []
+
+screenshot:
+  format: png          # png = deterministic PIL decode + VLM-friendly
+  quality: 80
+  max_dimension: 1280  # downsample target = the model's input resolution
+  crop: null
+
+redaction:
+  mask_password_nodes: true   # composite black over isPassword nodes pre-compression
+  extra_mask_selectors: []
+
+loop:
+  max_steps: 40
+  settle_ceiling_s: 12
+  # Consecutive no-action turns before the loop gives up (agent made no move).
+  max_idle_turns: 2

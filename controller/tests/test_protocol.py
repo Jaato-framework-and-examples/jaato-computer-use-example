@@ -1,0 +1,213 @@
+"""Unit tests for the pure wire/protocol/policy logic (no device, no network).
+
+Exercises the parts that must be byte-faithful to 01-PROTOCOL.md: binary
+framing, Snapshot/Selector/SettleConfig/Action (de)serialisation, grounding
+selector choice + recovery, and config validation.
+"""
+import io
+import json
+import struct
+
+import pytest
+
+from a11y import grounding
+from a11y.annotate import set_of_marks, tree_text
+from a11y.device_session import Observation
+from a11y.framing import parse_binary_frame
+from a11y.protocol import (Action, Selector, SettleConfig, Snapshot,
+                           configure_args)
+from a11y.wire import PV, DeviceError, ErrorCode
+
+
+# --- framing (01 §4) --------------------------------------------------------
+
+def _build_frame(header: dict, payload: bytes) -> bytes:
+    hb = json.dumps(header).encode("utf-8")
+    return struct.pack(">I", len(hb)) + hb + payload
+
+
+def test_parse_binary_frame_roundtrip():
+    header = {"type": "screenshot", "correlationId": "r-2", "snapshotVersion": 1291,
+              "format": "png", "width": 1080, "height": 2340, "reason": "bundled"}
+    frame = parse_binary_frame(_build_frame(header, b"\x89PNGdata"))
+    assert frame.snapshot_version == 1291
+    assert frame.correlation_id == "r-2"
+    assert frame.payload == b"\x89PNGdata"
+
+
+def test_parse_binary_frame_truncated_raises():
+    with pytest.raises(ValueError):
+        parse_binary_frame(b"\x00\x00")  # < 4 bytes
+    with pytest.raises(ValueError):
+        parse_binary_frame(struct.pack(">I", 999) + b"short")  # header shorter than declared
+
+
+# --- snapshot / node (01 §8) ------------------------------------------------
+
+def _snap() -> Snapshot:
+    return Snapshot.parse({
+        "snapshotVersion": 1291, "pkg": "com.foo.app", "activity": ".Main",
+        "screen": {"width": 1080, "height": 2340},
+        "nodes": [
+            {"ref": 1, "cls": "android.widget.Button", "viewId": "com.foo.app:id/ok",
+             "text": "OK", "bounds": [0, 0, 100, 50], "flags": ["clickable", "enabled", "visible"]},
+            {"ref": 2, "cls": "android.widget.TextView", "text": "OK",
+             "bounds": [0, 60, 100, 90], "flags": ["visible"]},
+            {"ref": 3, "cls": "android.widget.EditText", "viewId": "com.foo.app:id/dup",
+             "bounds": [0, 100, 100, 150], "flags": ["editable", "focusable", "visible"]},
+            {"ref": 4, "cls": "android.widget.EditText", "viewId": "com.foo.app:id/dup",
+             "bounds": [0, 160, 100, 210], "flags": ["editable", "visible"]},
+        ],
+    })
+
+
+def test_snapshot_lookup_and_helpers():
+    s = _snap()
+    assert s.by_ref(3).view_id == "com.foo.app:id/dup"
+    with pytest.raises(KeyError):
+        s.by_ref(99)
+    assert {n.ref for n in s.actionable_nodes()} == {1, 3, 4}  # 2 is a bare TextView
+    assert s.view_id_ambiguous("com.foo.app:id/dup") is True
+    assert s.view_id_ambiguous("com.foo.app:id/ok") is False
+    assert s.text_index(s.by_ref(2)) == 1  # second node with text "OK"
+
+
+# --- selector (01 §10) ------------------------------------------------------
+
+def test_selector_to_wire_ref_binding():
+    w = Selector(ref=42, snapshot_version=1291).to_wire()
+    assert w == {"ref": 42, "snapshotVersion": 1291}
+
+
+def test_selector_to_wire_composite():
+    w = Selector(view_id="id/x", text="Row 1").to_wire()
+    assert w == {"viewId": "id/x", "text": "Row 1"}
+
+
+# --- settle config (01 §9) --------------------------------------------------
+
+def test_settle_config_validation():
+    with pytest.raises(ValueError):
+        SettleConfig(event_mask=["NOT_A_REAL_EVENT"])
+    with pytest.raises(ValueError):
+        SettleConfig(mode="bogus")
+    ok = SettleConfig(quiet_window_ms=800, package_scope=["com.foo.app"])
+    assert ok.to_wire()["quietWindowMs"] == 800
+
+
+# --- actions (01 §11) -------------------------------------------------------
+
+def test_action_validation_and_merge():
+    with pytest.raises(ValueError):
+        Action("SET_TEXT")  # missing text
+    with pytest.raises(ValueError):
+        Action.global_("NOPE")
+    args = Action.set_text("hello").merge_into({"target": {}})
+    assert args["action"] == "SET_TEXT" and args["text"] == "hello"
+    g = Action.gesture_tap(10, 20).merge_into({})
+    assert g["gesture"]["type"] == "tap"
+
+
+def test_configure_args_shape():
+    a = configure_args(SettleConfig(package_scope=["p"]), ["p"],
+                       {"format": "png"}, {"maskPasswordNodes": True})
+    assert a["packageScope"] == ["p"]
+    assert a["settle"]["packageScope"] == ["p"]
+    assert a["redaction"]["maskPasswordNodes"] is True
+
+
+# --- grounding (03 §4) ------------------------------------------------------
+
+def test_to_selector_immediate_uses_ref():
+    s = _snap()
+    sel = grounding.to_selector(1, s, acting_immediately=True)
+    assert sel.ref == 1 and sel.snapshot_version == 1291
+
+
+def test_to_selector_durable_prefers_viewid_disambiguated():
+    s = _snap()
+    # ref 3 has an ambiguous viewId -> selector carries text disambiguator (None here) ...
+    sel = grounding.to_selector(1, s, acting_immediately=False)
+    assert sel.view_id == "com.foo.app:id/ok" and sel.text is None
+    # ref 3's viewId is ambiguous; it has no text, so text stays None but viewId is chosen
+    sel3 = grounding.to_selector(3, s, acting_immediately=False)
+    assert sel3.view_id == "com.foo.app:id/dup"
+
+
+def test_to_selector_text_then_desc_then_bounds():
+    s = Snapshot.parse({
+        "snapshotVersion": 5, "pkg": "p", "activity": "a", "screen": {"width": 100, "height": 100},
+        "nodes": [
+            {"ref": 1, "cls": "X", "text": "Hello", "bounds": [0, 0, 10, 10], "flags": ["clickable"]},
+            {"ref": 2, "cls": "Y", "desc": "Close", "bounds": [0, 10, 10, 20], "flags": ["clickable"]},
+            {"ref": 3, "cls": "Z", "bounds": [0, 20, 10, 30], "flags": ["clickable"]},
+        ],
+    })
+    assert grounding.to_selector(1, s, acting_immediately=False).text == "Hello"
+    assert grounding.to_selector(2, s, acting_immediately=False).desc == "Close"
+    assert grounding.to_selector(3, s, acting_immediately=False).bounds == [0, 20, 10, 30]
+
+
+def test_recovery_classification():
+    assert grounding.describe_recovery(DeviceError(ErrorCode.STALE)).next == "reobserve"
+    assert grounding.describe_recovery(DeviceError(ErrorCode.AMBIGUOUS)).next == "reobserve"
+    # NOT_ACTIONABLE on a CLICK -> tap the visible-but-inert node by coordinate.
+    r = grounding.describe_recovery(DeviceError(ErrorCode.NOT_ACTIONABLE),
+                                    node_bounds=[0, 0, 40, 40], action=Action.click())
+    assert r.next == "retry" and r.action.action == "GESTURE"
+    assert r.selector.bounds == [0, 0, 40, 40]
+    # NOT_ACTIONABLE on a SCROLL must NOT become a tap (that would launch the
+    # element) — re-observe and steer the agent instead.
+    s = grounding.describe_recovery(DeviceError(ErrorCode.NOT_ACTIONABLE),
+                                    node_bounds=[0, 0, 40, 40], action=Action.scroll_dir("down"))
+    assert s.next == "reobserve" and s.action is None
+    # The device's own message (e.g. "advertised but at scroll extent" vs "does
+    # not advertise SCROLL_DOWN") is a distinction only it can make — surface it
+    # verbatim rather than flattening it to a generic hint.
+    s2 = grounding.describe_recovery(
+        DeviceError(ErrorCode.NOT_ACTIONABLE, "already at scroll extent"),
+        node_bounds=[0, 0, 40, 40], action=Action.scroll_dir("down"))
+    assert s2.reason == "already at scroll extent"
+
+
+def test_scroll_dir_maps_to_directional_actions():
+    assert Action.scroll_dir("down").action == "SCROLL_DOWN"
+    assert Action.scroll_dir("UP").action == "SCROLL_UP"
+    assert Action.scroll_dir("left").action == "SCROLL_LEFT"
+    assert Action.scroll_dir("right").action == "SCROLL_RIGHT"
+    # Orientation-agnostic FORWARD/BACKWARD stay on the wire (device keeps them).
+    assert Action.scroll(True).action == "SCROLL_FORWARD"
+    for bad in ("forward", "sideways", ""):
+        try:
+            Action.scroll_dir(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"scroll_dir({bad!r}) should have raised")
+
+
+# --- annotate ---------------------------------------------------------------
+
+def test_tree_text_lists_refs():
+    obs = Observation(snapshot=_snap(), image=None)
+    txt = tree_text(obs)
+    assert "[1]" in txt and "com.foo.app:id/ok" in txt and "v1291" in txt
+
+
+def test_set_of_marks_draws_on_real_png():
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (540, 1170), "white").save(buf, format="PNG")
+    obs = Observation(snapshot=_snap(), image=buf.getvalue())
+    out = set_of_marks(obs)
+    assert out[:8] == b"\x89PNG\r\n\x1a\n"  # a valid PNG came back
+    with pytest.raises(ValueError):
+        set_of_marks(Observation(snapshot=_snap(), image=None))
+
+
+# --- wire -------------------------------------------------------------------
+
+def test_device_error_from_wire():
+    e = DeviceError.from_wire({"code": "RATE_LIMITED", "message": "slow down", "retryAfterMs": 640})
+    assert e.code == "RATE_LIMITED" and e.retry_after_ms == 640
+    assert PV == 1
