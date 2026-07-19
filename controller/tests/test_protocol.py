@@ -194,6 +194,28 @@ def test_tree_text_lists_refs():
     assert "[1]" in txt and "com.foo.app:id/ok" in txt and "v1291" in txt
 
 
+def test_tree_text_collapses_scroll_axes():
+    # The X-feed case: two scrollables read identically as bare `scrollable` until
+    # the device exposes axes — a horizontal pager (left/right) and a vertical feed
+    # (down/up). The tree must fold the axis tokens into `scrollable:<dirs>` so the
+    # model can tell them apart, and must not leak the raw scrollable<Dir> tokens.
+    snap = Snapshot.parse({
+        "snapshotVersion": 7, "pkg": "com.x", "activity": ".Main",
+        "screen": {"width": 1000, "height": 2000},
+        "nodes": [
+            {"ref": 0, "cls": "V", "bounds": [0, 0, 1000, 2000],
+             "flags": ["scrollable", "scrollableLeft", "scrollableRight", "visible"]},
+            {"ref": 1, "cls": "V", "bounds": [0, 0, 1000, 2000],
+             "flags": ["scrollable", "scrollableDown", "scrollableUp", "visible"]},
+        ],
+    })
+    txt = tree_text(Observation(snapshot=snap, image=None))
+    assert "scrollable:left,right" in txt   # pager (ref 0)
+    assert "scrollable:down,up" in txt      # feed (ref 1)
+    assert "scrollableDown" not in txt      # raw axis tokens folded away
+    assert "scrollableLeft" not in txt
+
+
 def test_set_of_marks_draws_on_real_png():
     from PIL import Image
     buf = io.BytesIO()

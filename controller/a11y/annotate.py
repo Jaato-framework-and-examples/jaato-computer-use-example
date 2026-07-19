@@ -100,7 +100,28 @@ def tree_text(obs: Observation) -> str:
     lines: List[str] = [header]
     for n in visible:
         ident = n.view_id or n.cls
-        flags = ",".join(n.flags)
+        flags = _render_flags(n.flags)
         label = (n.text or n.desc or "").replace("\n", " ")
         lines.append(f"[{n.ref}] {ident} {label!r} {n.bounds} <{flags}>")
     return "\n".join(lines)
+
+
+_SCROLL_DIR_FLAGS = {
+    "scrollableDown": "down", "scrollableUp": "up",
+    "scrollableLeft": "left", "scrollableRight": "right",
+}
+
+
+def _render_flags(flags: List[str]) -> str:
+    """Collapse the axis-explicit scroll tokens (``scrollableDown/Up/Left/Right``,
+    01-PROTOCOL §8) into a compact ``scrollable:down,up`` so the model can tell a
+    vertical feed from a horizontal pager at a glance — two nodes that otherwise
+    read identically as ``scrollable``. Non-scroll flags pass through unchanged, in
+    order; a device that omits the axis tokens just renders a bare ``scrollable``."""
+    dirs = [_SCROLL_DIR_FLAGS[f] for f in flags if f in _SCROLL_DIR_FLAGS]
+    out: List[str] = []
+    for f in flags:
+        if f in _SCROLL_DIR_FLAGS:
+            continue  # folded into the scrollable token
+        out.append(f"scrollable:{','.join(dirs)}" if (f == "scrollable" and dirs) else f)
+    return ",".join(out)
