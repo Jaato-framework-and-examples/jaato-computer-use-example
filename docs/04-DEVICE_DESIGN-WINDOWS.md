@@ -8,10 +8,10 @@ and — importantly — **where Windows forces the contract to bend**.
 mechanism*: enumerate UI, execute controller-named actions, debounce events into `settled`, capture
 pixels, and pipe it all over one outbound WebSocket. **No grounding policy, no heuristics, no model.**
 
-**Status:** design only; nothing here is implemented. The highest-risk assumptions (UIA walk latency,
-cache completeness, WGC capture border) have been **measured on real hardware** — Windows 11 25H2
-build 26200 — and hold; see §12. Four lower-risk items (§12.4–12.7) remain open but shape
-implementation, not architecture.
+**Status:** design only; nothing here is implemented. Five of seven §12 assumptions have been
+**measured on real hardware** (Windows 11 25H2, build 26200) and hold — including both correctness
+hazards (silent input failure vs elevated windows, UWP scope leakage). Only §12.6–12.7 (locked-session
+enumeration, event-subscription cost) remain open, and they shape implementation, not architecture.
 
 ---
 
@@ -86,18 +86,30 @@ it does not throttle a running foreground process's socket.
 ### 3.2 Elevation / UIPI — fail loudly, never silently
 
 Default is **non-elevated**. A medium-integrity process **cannot** automate a higher-integrity
-(elevated) window: UIA reads are refused, and `SendInput` to it is **silently discarded** by UIPI.
-Silent discard is the dangerous part — the controller would see an action "succeed" and nothing happen.
+(elevated) window. ✅ **Measured on build 26200 (§12.5):**
 
-So the device **detects and reports** rather than letting it fail quietly:
+- **UIA reads are refused** — `ElementFromHandle` returns the OS-cached *title*, but the content tree
+  comes back with **0 children**; a non-`uiAccess` medium client cannot retrieve a higher-IL window's
+  tree.
+- **Window-message input** (`PostMessage`/`SendMessage`) hard-fails with `ERROR_ACCESS_DENIED` —
+  detectable.
+- **Global `SendInput`, however, is silently dropped and still returns success** when a higher-IL
+  window is foreground. This is the confirmed hazard: attempt-and-observe **cannot** detect it, because
+  the call reports success while nothing happened.
 
-- On resolve/act against a window, compare the target process's integrity level to our own
-  (`GetTokenInformation` / `TokenIntegrityLevel`).
-- If the target is higher integrity → fail with **`PERMISSION`** (existing §7 code — "no (needs
-  user)"), message naming elevation as the cause.
+Because `SendInput` cannot report its own failure, the integrity check is a **mandatory pre-action
+gate**, not a fallback. Measured reliable: `OpenProcess(target.pid, PROCESS_QUERY_LIMITED_INFORMATION)`
+is granted *even across* the IL boundary (while `VM_READ` is denied, confirming the boundary is real),
+so we can **always** read the target's integrity and compare before acting:
 
-No new error code, no auto-elevation, no silent no-op. An elevated mode may be offered later as an
-explicit opt-in; `uiAccess=true` (signed binary in Program Files) is the correct long-term answer and
+- Before *any* actuation on a window, `OpenProcess(QUERY_LIMITED)` → `GetTokenInformation` /
+  `TokenIntegrityLevel`, compare to our own.
+- If the target is higher integrity → fail **`PERMISSION`** (existing §7 code) *before* touching it —
+  the silent `SendInput` path is never reached.
+
+Fail-closed even if the pre-check were somehow skipped: UIA reads and message input are both refused
+anyway. No new error code, no auto-elevation, no silent no-op. An elevated mode may be offered later as
+an explicit opt-in; `uiAccess=true` (signed binary in Program Files) is the correct long-term answer and
 is deliberately out of scope for a reference implementation.
 
 ---
@@ -276,14 +288,28 @@ a single-consumer command queue so handlers never overlap; `waitForSettle` arms 
 than blocking. Fail-closed defaults are identical — **empty scope observes and acts on nothing**,
 password masking on, conservative settle.
 
-**Scope identity** is the one substantive change. `packageScope` entries are matched against the
-target window's process:
+**Scope identity** is the one substantive change, and it is **two-branch** — ✅ measured (§12.4),
+because a single exe-path rule silently leaks for UWP.
 
-- primary: **full executable path**, case-insensitive (precise, hard to spoof)
-- convenience: bare **process name** (`notepad.exe`)
+Why: a Store app's visible top-level window (class `ApplicationFrameWindow`) is owned by the **shared**
+host `C:\Windows\System32\ApplicationFrameHost.exe`, *not* the app's own package. Exe-path over the
+frame window's PID is therefore **identical for every UWP app** — `packageScope` matched on exe path
+would let any Store app match any other. The real app is a hosted `Windows.UI.Core.CoreWindow` child
+in a different, packaged process (e.g. Settings → `SystemSettings.exe`,
+`windows.immersivecontrolpanel_cw5n1h2txyewy`).
 
-⚠ **UNVALIDATED:** UWP/Store apps run under shared host processes, so exe path is not always
-discriminating; those may need `AUMID` / package family name. To be confirmed against a real Store app.
+So match on identity chosen by window kind:
+
+- **UWP/packaged** — tell: frame process is `ApplicationFrameHost.exe`, or the window has a non-empty
+  AUMID. Match on **AUMID** via `SHGetPropertyStoreForWindow(hwnd, PKEY_AppUserModel_ID)` read straight
+  off the top-level window we already hold (e.g.
+  `windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel`), or the hosted
+  process's **package family name** as a cross-check. Per-window, discriminating, no child-process
+  resolution required.
+- **Classic Win32** — AUMID is empty; match on **full executable path**, case-insensitive (precise,
+  hard to spoof), with bare **process name** (`explorer.exe`) as a convenience.
+
+The exe-path rule is kept **only** for the Win32 branch; using it for UWP is the leak.
 
 ---
 
@@ -358,16 +384,25 @@ Windows 11 25H2 (build 26200) with raw `IUIAutomation` COM; 4–7 remain open.
 3. ✅ **WGC border** (§7) — **AVAILABLE.** `IsBorderRequired` present and settable on build 26200
    (`IsCursorCaptureEnabled` too). Build-dependent, so probe and report in `hello`. Live-frame visual
    proof still outstanding.
-4. ⚠ **UWP/Store scope identity** (§8) — is exe path discriminating, or is AUMID required?
-5. ⚠ **UIPI behaviour** (§3.2) — confirm reads *and* input are both refused against an elevated window,
-   and that integrity comparison detects it reliably.
+4. ✅ **UWP/Store scope identity** (§8) — **exe path LEAKS, use AUMID.** The visible UWP window is owned
+   by the shared `ApplicationFrameHost.exe`, so exe-path scoping is identical for every Store app.
+   Discriminate on AUMID (`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`) off the top-level
+   window, or the hosted process's package family name. Win32 keeps exe-path. → two-branch rule in §8.
+5. ✅ **UIPI behaviour** (§3.2) — **integrity pre-check is a reliable, mandatory gate.**
+   `OpenProcess(QUERY_LIMITED)` + `TokenIntegrityLevel` is granted across the boundary → we detect an
+   elevated target before acting; `VM_READ` denied and UIA content tree = 0 children confirm reads are
+   refused. Confirmed hazard: `SendInput` is **silently dropped but returns success** against a
+   higher-IL foreground window — undetectable by attempt-and-observe, which is *why* the pre-check must
+   run first.
 6. ⚠ **Locked session** (§10) — what, if anything, is enumerable while the workstation is locked.
 7. ⚠ **Event subscription cost** (§6) — measure the slowdown imposed on a target app by our handlers.
 
-The highest-risk assumption is now retired: performance was the one thing that could have forced a
-different design, and it did not. The remainder of the design is a faithful re-expression of a contract
-already proven on Android hardware. Items 4–7 are correctness/politeness details that shape
-implementation rather than architecture.
+The architecture-risk assumptions are now retired. Performance (§12.1) was the one thing that could
+have forced a different design and it held; the two correctness hazards — silent input failure against
+elevated windows (§12.5) and UWP scope leakage (§12.4) — are both real and both cleanly handled
+(mandatory integrity pre-check; AUMID-based UWP scoping). The remainder is a faithful re-expression of
+a contract already proven on Android hardware. §12.6–12.7 are politeness/robustness details that shape
+implementation, not architecture.
 
 *Measurements: DESKTOP-DN94MQQ, Windows 11 25H2 build 26200.8737, .NET 8, raw `IUIAutomation` COM
 (tlbimp'd from `UIAutomationCore.dll`, not `System.Windows.Automation`). Cached figures are the median
