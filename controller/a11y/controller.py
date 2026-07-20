@@ -71,6 +71,19 @@ class Controller:
     async def first_observation(self) -> Observation:
         return await self._observe_and_follow()
 
+    @property
+    def platform(self) -> str:
+        """The device's declared platform ("android" / "windows"). Drives the
+        platform-specific host tools and the first-turn desktop preamble."""
+        return self._session.platform
+
+    async def list_windows(self) -> dict:
+        """Raw ``windows`` verb result — every top-level window, non-scope-gated
+        (the device owns the shape: on Windows, ``windows[]`` of id / title /
+        exePath / aumid / foreground). Backs the ``screen_windows`` tool and the
+        Windows first-turn desktop preamble."""
+        return await self._session.request("windows", {})
+
     # -- follow-the-foreground ----------------------------------------------
     async def _foreground_pkg(self) -> str:
         """Foreground package to scope to, from the non-scope-gated ``windows``

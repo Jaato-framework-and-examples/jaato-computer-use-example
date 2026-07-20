@@ -44,6 +44,25 @@ def _screen_result(controller: Controller, ack: str) -> dict:
     return result
 
 
+def windows_text(data: dict) -> str:
+    """Render the ``windows`` verb result (Windows top-level windows) as a compact
+    list the model reads: one line per window — hwnd id, title, program, and a
+    FOREGROUND marker. Backs ``screen_windows`` and the first-turn desktop preamble
+    (03/04 §9). The device owns the shape; a window's package identity is its AUMID
+    (UWP) or executable path (Win32), shown here as the program's basename."""
+    wins = data.get("windows") or []
+    if not wins:
+        return "no top-level windows reported by the device"
+    lines = ["Top-level windows on the desktop (the FOREGROUND one is marked):"]
+    for w in wins:
+        ident = w.get("aumid") or w.get("exePath") or ""
+        prog = ident.rsplit("\\", 1)[-1] if ident else "?"
+        title = (w.get("title") or "").replace("\n", " ")
+        fg = "  [FOREGROUND]" if w.get("foreground") else ""
+        lines.append(f"  [{w.get('id')}] {title!r} — {prog}{fg}")
+    return "\n".join(lines)
+
+
 def build_tools(controller: Controller) -> List[Dict[str, Any]]:
     """Return the ``register_client_tools`` specs bound to ``controller``."""
 
@@ -82,6 +101,11 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
 
     async def screen_wait(args: dict) -> dict:
         return _screen_result(controller, await controller.wait())
+
+    async def screen_windows(args: dict) -> dict:
+        # Metadata query (non-scope-gated); doesn't change the screen, so it
+        # returns just the window list, not a fresh set-of-marks bundle.
+        return {"result": windows_text(await controller.list_windows())}
 
     async def screen_done(args: dict) -> dict:
         return {"result": controller.mark_done(str(args.get("summary", "")))}
@@ -168,6 +192,20 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
                         "required": ["summary"]},
          "handler": screen_done},
     ]
+    if controller.platform == "windows":
+        # Windows is a multi-window desktop: without this the model sees only the
+        # scoped foreground window and mis-reads the machine from its content (an
+        # SSH terminal -> "I'm on Linux"). Android's single-foreground model needs
+        # no such tool, so it's gated to the declared platform.
+        specs.append({
+            "name": "screen_windows",
+            "description": "List every top-level window on the Windows desktop "
+                           "(id, title, program; the foreground one is marked). The "
+                           "foreground window is only ONE of many, and its content is "
+                           "not the machine — use this to see everything that's open.",
+            "parameters": {"type": "object", "properties": {}},
+            "handler": screen_windows,
+        })
     for spec in specs:
         spec["handler"] = _logged(spec["name"], spec["handler"])
     return specs

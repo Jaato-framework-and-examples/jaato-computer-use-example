@@ -268,3 +268,24 @@ def test_device_error_from_wire():
     e = DeviceError.from_wire({"code": "RATE_LIMITED", "message": "slow down", "retryAfterMs": 640})
     assert e.code == "RATE_LIMITED" and e.retry_after_ms == 640
     assert PV == 1
+
+
+def test_windows_text_lists_and_marks_foreground():
+    """windows_text renders the `windows` verb result, one line per window, with
+    exactly the foreground window marked and UWP windows shown by AUMID."""
+    from a11y.host_tools import windows_text
+    data = {"windows": [
+        {"id": 66, "title": "Notepad", "exePath": r"C:\Windows\notepad.exe",
+         "foreground": False},
+        {"id": 77, "title": "ssh dan@box",
+         "exePath": r"C:\Program Files\Mobatek\MobaXterm\MobaXterm.exe",
+         "foreground": True},
+        {"id": 88, "title": "Calculator",
+         "aumid": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "foreground": False},
+    ]}
+    out = windows_text(data)
+    assert "notepad.exe" in out                       # Win32 -> exe basename
+    assert "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App" in out  # UWP -> aumid
+    fg = [ln for ln in out.splitlines() if "[FOREGROUND]" in ln]
+    assert len(fg) == 1 and "MobaXterm.exe" in fg[0]  # exactly the foreground one
+    assert "no top-level windows" in windows_text({"windows": []})

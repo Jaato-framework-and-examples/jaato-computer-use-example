@@ -58,10 +58,27 @@ RECONNECT_TIMEOUT_S = 90.0
 AGENT = "a11y-operator"
 
 
+def _windows_preamble(data: dict) -> str:
+    """First-turn desktop grounding for platform==windows: state plainly that the
+    device is a Windows 11 desktop of MANY windows and that a window's content is
+    not the machine, then list the live windows. Kills the mis-grounding where the
+    foreground window (e.g. an SSH terminal into Linux) is read as the device."""
+    from a11y.host_tools import windows_text
+    return ("You are driving a Windows 11 desktop via an accessibility bridge — it "
+            "runs MANY top-level windows at once. The FOREGROUND window's CONTENT is "
+            "NOT the machine you control: a terminal window SSH'd into a Linux box is "
+            "still just one window on this Windows desktop, not the system you "
+            "operate. Never infer the OS / environment from a window's content.\n"
+            + windows_text(data)
+            + "\nCall screen_windows at any time to re-list all top-level windows.")
+
+
 def _observation_message(controller: Controller, first: bool,
-                         steer_lines: List[str]) -> tuple[str, list]:
+                         steer_lines: List[str],
+                         preamble: Optional[str] = None) -> tuple[str, list]:
     """Build the per-turn user message (text + marked-image attachment), folding
-    in any operator steering typed since the last turn."""
+    in any operator steering typed since the last turn. ``preamble`` (Windows
+    desktop grounding) is prepended on the FIRST turn only."""
     obs = controller.pending_observation
     assert obs is not None
     tree = annotate.tree_text(obs)
@@ -70,6 +87,8 @@ def _observation_message(controller: Controller, first: bool,
     # this warrants a screen.* tool call is the agent's judgment (see the persona),
     # so no "take an action" imperative and no "TASK:" framing that would coerce it.
     parts: List[str] = []
+    if preamble and first:
+        parts.append(preamble)
     if steer_lines:
         parts.append("USER: " + " ".join(steer_lines))
     parts.append(("Current screen:" if first else "Updated screen:") + "\n" + tree)
@@ -264,6 +283,12 @@ async def run(initial_task: Optional[str], socket: str,
             turn_done.set()
         client.subscribe(EventType.SESSION_TERMINATED, on_terminated)
 
+        # On Windows, ground the model on the first turn: it's a multi-window
+        # desktop and the foreground window's content is not the machine. Fetched
+        # once (the live window list) and prepended to the first observation.
+        win_preamble = (_windows_preamble(await controller.list_windows())
+                        if controller.platform == "windows" else None)
+
         pending_steer: List[str] = [initial_task] if initial_task else []
         first = True
         idle = False
@@ -296,7 +321,8 @@ async def run(initial_task: Optional[str], socket: str,
                     emit(f"[bridge] couldn't refresh the screen: {exc}")
 
             pending_steer.extend(_drain(steer_queue))  # fold any typed-ahead lines
-            text, attachments = _observation_message(controller, first, pending_steer)
+            text, attachments = _observation_message(controller, first, pending_steer,
+                                                     preamble=win_preamble)
             pending_steer = []
 
             turn_done.clear()
