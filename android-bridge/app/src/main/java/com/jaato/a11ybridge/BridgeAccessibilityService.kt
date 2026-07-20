@@ -252,6 +252,10 @@ class BridgeAccessibilityService : AccessibilityService(), WsClient.Listener {
         val s = screen()
         val data = buildJsonObject {
             put("pv", Wire.PV)
+            // The device DECLARES its platform so the controller routes to the right window
+            // model (Android tree vs Windows window-set) instead of sniffing which fields a
+            // response carries to GUESS it. One of: "android" | "windows".
+            put("platform", "android")
             put("deviceId", Prefs.deviceId(this@BridgeAccessibilityService))
             put("androidSdk", Build.VERSION.SDK_INT)
             put(

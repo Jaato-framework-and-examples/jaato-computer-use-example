@@ -220,6 +220,7 @@ Header schema (screenshot example):
 ```json
 { "kind":"event", "event":"hello", "data": {
   "pv": 1,
+  "platform": "android",
   "deviceId": "tab-samsung-01",
   "androidSdk": 34,
   "capabilities": {
@@ -232,7 +233,8 @@ Header schema (screenshot example):
 }}
 ```
 
-The daemon uses `capabilities` to refuse or degrade gracefully (e.g. no `takeScreenshot` on SDK < 30 → tree-only mode).
+- **`platform`** — `android | windows`. The device **declares** which platform it is, so the daemon routes to the correct window model (Android's single-tree `observe` vs the Windows multi-window set) rather than inferring it from which fields a response carries. The daemon MUST fail loudly on an absent/unknown value — no silent default.
+- The daemon uses `capabilities` to refuse or degrade gracefully (e.g. no `takeScreenshot` on SDK < 30 → tree-only mode).
 
 ### 6.2 `settled`
 
