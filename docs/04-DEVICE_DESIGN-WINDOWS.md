@@ -8,8 +8,10 @@ and — importantly — **where Windows forces the contract to bend**.
 mechanism*: enumerate UI, execute controller-named actions, debounce events into `settled`, capture
 pixels, and pipe it all over one outbound WebSocket. **No grounding policy, no heuristics, no model.**
 
-**Status:** design only. Nothing here is implemented. Several claims are marked ⚠ **UNVALIDATED** —
-see §12; they must be measured on real hardware before code is committed to them.
+**Status:** design only; nothing here is implemented. The highest-risk assumptions (UIA walk latency,
+cache completeness, WGC capture border) have been **measured on real hardware** — Windows 11 25H2
+build 26200 — and hold; see §12. Four lower-risk items (§12.4–12.7) remain open but shape
+implementation, not architecture.
 
 ---
 
@@ -119,15 +121,33 @@ every walk bounded, which is what makes the performance problem tractable at all
 
 ### 4.2 Performance is the whole game
 
-⚠ **UNVALIDATED — must be measured (§12).** Every UIA property read is a cross-process COM call.
-A naive per-property walk of a large window is widely reported to take **seconds**. The mitigation is
-non-optional:
+✅ **VALIDATED** on Windows 11 25H2 (build 26200), raw `IUIAutomation` COM — see §12.1 for numbers.
+Every UIA property read is a cross-process COM call, and a naive per-property walk of a large window
+does take **seconds**. The mitigation works, and is non-optional:
 
 - Build one `IUIAutomationCacheRequest` listing **every** property and pattern we need.
 - Walk with **`FindAllBuildCache(TreeScope_Subtree, condition, cacheRequest)`** — one bulk call that
   returns the whole subtree with properties pre-fetched.
+- **Set `cacheRequest.TreeScope = TreeScope_Element`** — cache each *returned* node's own properties.
 - Read only `Cached*` accessors afterwards. Touching a `Current*` accessor silently reintroduces a
   cross-process round trip per node and destroys the gain.
+
+> ⚠ **The `TreeScope` footgun — measured, ~7× penalty.** It is a natural mistake to mirror the method
+> argument and set `cacheRequest.TreeScope = TreeScope_Subtree`. **Don't.** The descent is *already*
+> performed by the scope argument to `FindAllBuildCache`; setting `Subtree` on the *cache request*
+> re-caches every returned node's entire subtree — an O(N²) blowup. Measured: browser
+> **1.46 s → 10.2 s**, Explorer **0.23 s → 1.17 s**. Done wrong, caching benchmarks *slower* than the
+> naive walk, which is exactly how this was nearly missed.
+
+Measured cost is **~0.4 ms/node cached vs ~2.3 ms/node naive** (2.9×–5.8× speedup). Navigation itself
+is cheap (~0.09 ms/node) — *materialising properties* is the expense, which is why one bulk call wins.
+
+**Where this leaves the design:** window-targeting plus a per-element cache is fast enough for the
+interactive loop on **ordinary windows** — ≤ ~300 content nodes complete in ≤ ~250 ms. It is **not**
+fast enough to feel instant on a **browser-scale document** (a full article = 3737 content nodes,
+~1.5 s even done correctly). So incremental/lazy subtree fetching stays on the roadmap as a
+**large-window optimisation, not a prerequisite**. Trimming the cached property set is a secondary
+knob: 19 → 5 properties saves ~15–20 % at browser scale, negligible on normal windows.
 
 A second, free win Android does not have: **UIA already ships a pruned view.** Its *Content view*
 filters out structural chrome. We use `ContentViewCondition` as the walk condition and apply our own
@@ -152,6 +172,12 @@ filters out structural chrome. We use `ContentViewCondition` as the walk conditi
 for the element's lifetime. `ref` remains a small integer scoped to one `snapshotVersion` (unchanged
 on the wire), but the device keeps a `ref → RuntimeId` table for that version, so re-resolution is by
 identity rather than by positional index. Same contract, sturdier mechanism.
+
+✅ **Measured free.** This requires `AutomationElementMode_Full` on the cache request; Full vs None is
+a negligible difference in walk time (§12.2), so there is no performance argument for dropping to
+`None` and losing `RuntimeId`. Keep Full. All 19 properties and 4 patterns above cache cleanly, and
+`Cached*` reads total 0.7–86 ms across all window sizes — nothing forces a `Current*` into the hot
+path. Keep the patterns cached too: it avoids a follow-up round trip when actuating.
 
 The **pruning contract is unchanged and shared with Android** (§8): emit a node iff visible ∧
 (actionable ∨ text-bearing ∨ described); collapse single-child chains; drop layout-only containers.
@@ -234,9 +260,12 @@ Two Windows-specific hazards:
 - If WGC is unavailable, `hello.capabilities.takeScreenshot` reports **false** and the controller runs
   tree-only. No silent degradation to a lesser API.
 
-⚠ **UNVALIDATED:** WGC historically draws a coloured border around captured windows;
-`GraphicsCaptureSession.IsBorderRequired = false` exists on newer builds but availability varies.
-Needs checking (§12) — a permanent border on every captured window is a real UX problem.
+✅ **VALIDATED (build 26200):** `GraphicsCaptureSession.IsSupported` is true, and
+**`IsBorderRequired` is present and settable** — so the permanent-capture-border defect is avoidable.
+`IsCursorCaptureEnabled` is settable too, which we want (the controller should not see a stray cursor
+baked into its grounding image). Availability is build-dependent, so probe rather than assume, and
+report the capability in `hello`. *Live-frame visual confirmation that the border is actually gone is
+still outstanding — availability was answered, pixels were not.*
 
 ---
 
@@ -306,22 +335,40 @@ navigation, and navigation is the controller's job.
 
 ## 12. Open questions — measure before building
 
-This design is written from API knowledge, not observation. The Windows host was unreachable at
-authoring time. The following must be settled empirically **before** committing to the design, because
-each one can invalidate part of it:
+This design was written from API knowledge, not observation. Items 1–3 have since been **measured** on
+Windows 11 25H2 (build 26200) with raw `IUIAutomation` COM; 4–7 remain open.
 
-1. **UIA walk latency** (§4.2) — time `FindAllBuildCache` over a realistic window (Explorer, a browser,
-   Settings) at several subtree sizes. *If cached bulk walks are still seconds-slow, the
-   window-targeted model is not enough and we need incremental/lazy subtree fetching.* This is the
-   single highest-risk assumption.
-2. **Cache completeness** — confirm every property/pattern we need is actually cacheable, and that no
-   `Current*` access sneaks into the hot path.
-3. **WGC border** (§7) — does `IsBorderRequired = false` work on the target build?
-4. **UWP/Store scope identity** (§8) — is exe path discriminating, or is AUMID required?
-5. **UIPI behaviour** (§3.2) — confirm reads *and* input are both refused against an elevated window,
+1. ✅ **UIA walk latency** (§4.2) — **VALIDATED.** Cached bulk walk vs naive per-property walk:
+
+   | window | nodes | cached total | naive | speedup |
+   |---|---:|---:|---:|---:|
+   | Notepad | 40 | **43 ms** | 123 ms | 2.9× |
+   | Settings | 139 | **68 ms** | 285 ms | 4.2× |
+   | File Explorer | 313 | **230 ms** | 850 ms | 3.7× |
+   | Browser (full article) | 3737 | **1.46 s** | 8.53 s | 5.8× |
+
+   ~0.4 ms/node cached, ~2.3 ms/node naive. Ordinary windows (≤ ~300 nodes) are ≤ ~250 ms — snappy
+   enough for the interactive loop, so the window-targeted model **holds**. Browser-scale trees remain
+   ~1.5 s, so incremental/lazy subtree fetching is retained as a **large-window optimisation, not a
+   prerequisite**. Requires `cacheRequest.TreeScope = TreeScope_Element` — see the §4.2 footgun.
+2. ✅ **Cache completeness** — **VALIDATED.** All 19 §4.3 properties + 4 patterns cache cleanly;
+   `Cached*` reads total 0.7–86 ms, so nothing forces a `Current*` into the hot path.
+   `AutomationElementMode` Full vs None is negligible → keep **Full**, making the `ref → RuntimeId`
+   table free.
+3. ✅ **WGC border** (§7) — **AVAILABLE.** `IsBorderRequired` present and settable on build 26200
+   (`IsCursorCaptureEnabled` too). Build-dependent, so probe and report in `hello`. Live-frame visual
+   proof still outstanding.
+4. ⚠ **UWP/Store scope identity** (§8) — is exe path discriminating, or is AUMID required?
+5. ⚠ **UIPI behaviour** (§3.2) — confirm reads *and* input are both refused against an elevated window,
    and that integrity comparison detects it reliably.
-6. **Locked session** (§10) — what, if anything, is enumerable while the workstation is locked.
-7. **Event subscription cost** (§6) — measure the slowdown imposed on a target app by our handlers.
+6. ⚠ **Locked session** (§10) — what, if anything, is enumerable while the workstation is locked.
+7. ⚠ **Event subscription cost** (§6) — measure the slowdown imposed on a target app by our handlers.
 
-Recommended first step is a **throwaway spike** covering (1) and (3) only. Those two carry most of the
-risk; the rest of the design is a faithful re-expression of a contract already proven on Android.
+The highest-risk assumption is now retired: performance was the one thing that could have forced a
+different design, and it did not. The remainder of the design is a faithful re-expression of a contract
+already proven on Android hardware. Items 4–7 are correctness/politeness details that shape
+implementation rather than architecture.
+
+*Measurements: DESKTOP-DN94MQQ, Windows 11 25H2 build 26200.8737, .NET 8, raw `IUIAutomation` COM
+(tlbimp'd from `UIAutomationCore.dll`, not `System.Windows.Automation`). Cached figures are the median
+of 3 warm runs.*
