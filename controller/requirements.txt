@@ -1,0 +1,8 @@
+# Controller (daemon-side "mind") runtime dependencies.
+#
+# jaato_sdk is the in-repo SDK (installed editable from the jaato monorepo,
+# not PyPI), so it is intentionally not listed here.
+prompt_toolkit>=3.0   # persistent input line + patch_stdout (mid-run steering UX)
+Pillow                # set-of-marks annotation (PIL)
+websockets            # device-facing a11y bridge WebSocket
+PyYAML                # profile / bridge config

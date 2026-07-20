@@ -34,8 +34,11 @@ import asyncio
 import datetime
 import logging
 import os
-import sys
+from contextlib import ExitStack
 from typing import List, Optional
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
 
 from jaato_sdk import ClientType, EventType, IPCClient
 
@@ -78,52 +81,47 @@ def _observation_message(controller: Controller, first: bool,
 
 # --- operator input (concurrent stdin) --------------------------------------
 
-def _install_stdin_reader(loop, steer_queue: "asyncio.Queue[str]",
-                          inject_queue: "asyncio.Queue[str]",
-                          turn_active: dict, quit_event: asyncio.Event) -> None:
-    """Feed operator lines into the event loop via its own selector
-    (``add_reader``) — NOT a ``run_in_executor(sys.stdin.readline)`` thread. A
-    blocking readline runs on the default executor, whose non-daemon threads
-    ``asyncio.run`` joins at shutdown; when the loop exits on a terminal error
-    that thread is still parked in ``readline`` and can't be joined, stalling
-    process exit ~300s. Reading the fd through the selector uses no thread, so
-    exit is immediate. POSIX stdin is line-buffered (cooked mode), so each
-    readable event delivers whole lines. ``/quit``/``/exit`` or EOF set
-    ``quit_event``.
+async def _operator_input_loop(session, client, steer_queue: "asyncio.Queue[str]",
+                               turn_active: dict, quit_event: asyncio.Event) -> None:
+    """Own stdin via a prompt_toolkit ``PromptSession`` so a single persistent
+    ``you>`` line stays pinned at the bottom while agent output scrolls above it
+    (the caller wraps the run in ``patch_stdout``). One always-waiting prompt is
+    what makes steering visible: the operator can type at ANY time, mid-turn or
+    idle — not only when the loop happens to hand back control.
 
-    A typed line is routed by whether a turn is in flight (``turn_active["on"]``):
-    - **turn in flight -> ``inject_queue``**: steered INTO the running turn via
-      ``inject_prompt`` (USER priority). The runner drains it at the turn's next
-      safe point (between ``screen_*`` actions), so the model reacts mid-run —
-      this is the whole point of steering.
-    - **idle -> ``steer_queue``**: an idle session does NOT run on an inject alone
+    Each submitted line is routed by whether a turn is in flight
+    (``turn_active["on"]``):
+
+    - **turn in flight** -> ``client.inject_prompt(line, source_type="user")``:
+      steered INTO the running turn (USER priority; the runner drains it at the
+      next ``screen_*`` boundary), so the model reacts mid-run. This is the point
+      of steering.
+    - **idle** -> ``steer_queue``: an idle session does NOT run on an inject alone
       (the daemon queues it but nothing drives a turn), so an idle line instead
       unblocks the ``you>`` wait / folds into the next ``send_message``.
-    """
-    fd = sys.stdin.fileno()
-    buf = {"pending": ""}
 
-    def _on_readable() -> None:
+    EOF (Ctrl-D), interrupt, or ``/quit``/``/exit`` set ``quit_event`` and end.
+    """
+    while not quit_event.is_set():
         try:
-            chunk = os.read(fd, 4096)
-        except (BlockingIOError, InterruptedError):
-            return
-        if not chunk:  # EOF (Ctrl-D)
-            loop.remove_reader(fd)
+            line = await session.prompt_async("you> ")
+        except (EOFError, KeyboardInterrupt):
             quit_event.set()
             return
-        buf["pending"] += chunk.decode("utf-8", "replace")
-        while "\n" in buf["pending"]:
-            line, buf["pending"] = buf["pending"].split("\n", 1)
-            line = line.strip()
-            if not line:
-                continue
-            if line in ("/quit", "/exit"):
-                quit_event.set()
-                return
-            (inject_queue if turn_active["on"] else steer_queue).put_nowait(line)
-
-    loop.add_reader(fd, _on_readable)
+        line = line.strip()
+        if not line:
+            continue
+        if line in ("/quit", "/exit"):
+            quit_event.set()
+            return
+        if turn_active["on"]:
+            try:
+                await client.inject_prompt(line, source_type="user")
+                print(f"[steering → folded into the running turn: {line!r}]")
+            except Exception as exc:
+                print(f"[steering failed: {exc}]")
+        else:
+            steer_queue.put_nowait(line)
 
 
 async def _next_line(steer_queue: "asyncio.Queue[str]",
@@ -248,46 +246,28 @@ async def run(initial_task: Optional[str], socket: str,
         turn_done.set()
     client.subscribe(EventType.SESSION_TERMINATED, on_terminated)
 
-    loop = asyncio.get_event_loop()
     steer_queue: "asyncio.Queue[str]" = asyncio.Queue()
-    inject_queue: "asyncio.Queue[str]" = asyncio.Queue()
     quit_event = asyncio.Event()
-    # Flipped True only while a turn is in flight; the stdin reader consults it to
+    # Flipped True only while a turn is in flight; the input loop consults it to
     # route a typed line to live steering (inject) vs the idle you> path (send).
     turn_active = {"on": False}
-    steer_task: Optional["asyncio.Future"] = None
-    stdin_reading = False
-    if not once:
-        _install_stdin_reader(loop, steer_queue, inject_queue, turn_active, quit_event)
-        stdin_reading = True
-
-        async def _steer_consumer() -> None:
-            """Forward operator lines typed DURING a turn into that running turn as
-            USER-priority steering: ``inject_prompt`` queues into the runner's
-            inject buffer, which the in-flight turn drains at its next safe point
-            (between actions), so the model reacts mid-run instead of at turn end.
-            If the turn ended between the keypress and here, re-route to the idle
-            path — an idle session won't run on an inject alone."""
-            while True:
-                line = await _next_line(inject_queue, quit_event)
-                if line is None:  # quit
-                    return
-                if not turn_active["on"]:
-                    steer_queue.put_nowait(line)  # turn ended in the gap; idle path
-                    continue
-                try:
-                    await client.inject_prompt(line, source_type="user")
-                    print(f"\n[steering → folded into the running turn: {line!r}]",
-                          flush=True)
-                except Exception as exc:
-                    print(f"\n[steering failed: {exc}]", flush=True)
-
-        steer_task = asyncio.ensure_future(_steer_consumer())
+    input_task: Optional["asyncio.Future"] = None
 
     pending_steer: List[str] = [initial_task] if initial_task else []
     first = True
     idle = False
     exit_code = 0
+
+    # patch_stdout keeps the persistent you> prompt pinned while agent output and
+    # status lines scroll above it — so the operator can type/steer at any time
+    # without their keystrokes tangling into the streamed model text. Interactive
+    # only: --once has no prompt and no patched stdout.
+    stack = ExitStack()
+    if not once:
+        stack.enter_context(patch_stdout())
+        session = PromptSession()
+        input_task = asyncio.ensure_future(
+            _operator_input_loop(session, client, steer_queue, turn_active, quit_event))
 
     try:
         for step in range(cfg.max_steps):
@@ -299,7 +279,8 @@ async def run(initial_task: Optional[str], socket: str,
                     if controller.done:
                         exit_code = 0
                     break
-                print("\nyou> ", end="", flush=True)
+                # No prompt print here: the PromptSession keeps a persistent you>
+                # line pinned at the bottom. An idle line arrives via steer_queue.
                 line = await _next_line(steer_queue, quit_event)
                 if line is None:
                     break
@@ -367,13 +348,9 @@ async def run(initial_task: Optional[str], socket: str,
             print(f"[loop] reached max_steps={cfg.max_steps}")
     finally:
         quit_event.set()
-        if steer_task is not None:
-            steer_task.cancel()
-        if stdin_reading:
-            try:
-                loop.remove_reader(sys.stdin.fileno())
-            except (ValueError, OSError):
-                pass
+        if input_task is not None:
+            input_task.cancel()
+        stack.close()  # exits patch_stdout, restoring the plain terminal
         await bridge.stop()
         await client.disconnect()
     return exit_code
