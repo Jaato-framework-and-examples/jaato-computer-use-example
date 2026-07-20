@@ -74,18 +74,37 @@ class Controller:
     # -- follow-the-foreground ----------------------------------------------
     async def _foreground_pkg(self) -> str:
         """Foreground package to scope to, from the non-scope-gated ``windows``
-        verb. Neither field is right alone: ``foregroundPkg`` (top window) becomes
-        ``com.android.systemui`` under a system overlay (nav bar / shade / AOD /
-        lock), while ``foregroundActivity`` (resumed activity) goes stale on the
-        launcher/home (many OEMs report the launcher window as ``type=="system"``,
-        so no app activity resumes). Combine them:
+        verb. The window model that verb returns differs by platform, so the
+        device *declares* its platform in ``hello`` and we dispatch on it — we do
+        NOT sniff which fields the response carries (that would infer the platform
+        by guessing; the device is the source of truth for what it is). A device
+        that declares no platform we implement is a fail-loud error, never a
+        silent default to one shape.
+        """
+        data = await self._session.request("windows", {})
+        platform = self._session.platform
+        if platform == "android":
+            return self._foreground_android(data)
+        if platform == "windows":
+            return self._foreground_windows(data)
+        raise DeviceError(
+            ErrorCode.INTERNAL,
+            f"device declared platform {platform!r}; no foreground-pick strategy "
+            "for it — the device must send a known 'platform' in its hello")
+
+    @staticmethod
+    def _foreground_android(data: dict) -> str:
+        """Android window model. Neither field is right alone: ``foregroundPkg``
+        (top window) becomes ``com.android.systemui`` under a system overlay (nav
+        bar / shade / AOD / lock), while ``foregroundActivity`` (resumed activity)
+        goes stale on the launcher/home (many OEMs report the launcher window as
+        ``type=="system"``, so no app activity resumes). Combine them:
 
         - focused window is an app (``type=="application"``) or the launcher
           (``pkg == launcherPkg``) -> it's a real foreground surface; scope to it.
         - otherwise the focused window is system chrome / AOD; the resumed
           activity still names the app behind it, so scope to that.
         """
-        data = await self._session.request("windows", {})
         fpkg = data.get("foregroundPkg") or ""
         launcher = data.get("launcherPkg") or ""
         focused = next((w for w in (data.get("windows") or []) if w.get("focused")), None)
@@ -96,8 +115,23 @@ class Controller:
             target = fpkg
         else:
             target = act_pkg or fpkg
-        log.info("foreground pick: fpkg=%s launcher=%s ftype=%s act=%s -> %s",
+        log.info("foreground pick (android): fpkg=%s launcher=%s ftype=%s act=%s -> %s",
                  fpkg, launcher, ftype, act_pkg, target)
+        return target
+
+    @staticmethod
+    def _foreground_windows(data: dict) -> str:
+        """Windows window model (04-DEVICE_DESIGN-WINDOWS §9). No launcher /
+        resumed-activity / system-overlay nuance to reconcile: the ``windows``
+        verb marks the active top-level window with ``foreground==true``, and a
+        window's package identity is its AUMID (UWP) or executable path (Win32) —
+        the same ``pkg`` observe reports. Pick that window's package; no window
+        foregrounded -> empty string (fail-closed, exactly as the Android path
+        yields "" when nothing resolves)."""
+        win = next((w for w in (data.get("windows") or []) if w.get("foreground")), None)
+        target = (win.get("aumid") or win.get("exePath") or "") if win else ""
+        log.info("foreground pick (windows): win=%s -> %s",
+                 win.get("title") if win else None, target)
         return target
 
     async def _apply_scope(self, pkg: str) -> None:

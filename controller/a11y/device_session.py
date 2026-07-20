@@ -79,6 +79,13 @@ class DeviceSession:
         self.device_id: str = hello.get("deviceId", "unknown")
         self.capabilities: dict = hello.get("capabilities", {})
         self.screen: dict = hello.get("screen", {})
+        #: Platform the device declares in hello (e.g. "android" / "windows").
+        #: The window-model dialect the ``windows`` verb speaks — and therefore how
+        #: foreground-pick reads it (controller §9) — differs per platform. The
+        #: daemon dispatches on this declared value rather than sniffing which
+        #: fields a response happens to carry: the device is the source of truth
+        #: for what it is, so it says so instead of us guessing.
+        self.platform: str = hello.get("platform", "")
         self._on_window_changed = on_window_changed
 
         self._id = 0
@@ -366,8 +373,9 @@ class BridgeServer:
             session = DeviceSession(ws, hello, on_window_changed=self._on_window_changed)
             self.session = session
             self._ready.set()
-            log.info("device connected: %s sdk=%s caps=%s",
-                     session.device_id, hello.get("androidSdk"), session.capabilities)
+            log.info("device connected: %s platform=%s sdk=%s caps=%s",
+                     session.device_id, session.platform or "<undeclared>",
+                     hello.get("androidSdk"), session.capabilities)
             await session.pump()
         finally:
             # Socket closed / handshake failed — release the slot so a fresh

@@ -25,9 +25,11 @@ class _FakeSession:
     """Answers the ``windows`` verb with a scripted foreground pkg; returns queued
     snapshots per observe(); records each configure() scope."""
 
-    def __init__(self, foreground, snaps):
+    def __init__(self, foreground, snaps, platform="android"):
         self._foreground = foreground  # str, or list consumed per windows call
         self._snaps = list(snaps)
+        self.platform = platform       # the device declares what it is (hello)
+        self.alive = True              # a live session (a config error re-raises, not "drop")
         self.configured_scopes = []
         self.windows_calls = 0
         self.current_snapshot = None
@@ -133,3 +135,58 @@ def test_follow_no_rescope_when_already_in_scope():
     assert sess.windows_calls == 1                        # checked...
     assert sess.configured_scopes == []                   # ...but foreground == scope, no re-scope
     assert obs.snapshot.version == 30
+
+
+def test_follow_rescopes_to_windows_foreground_by_declared_platform():
+    # A device declaring platform="windows" speaks the Windows window model: the
+    # windows verb marks the active window with foreground=true and carries no
+    # Android fields. Dispatch on the declared platform picks that window's
+    # package (exePath here; aumid when present for UWP), NOT by sniffing fields.
+    in_scope = _snap(60, r"C:\Windows\explorer.exe", None,
+                     nodes=[{"ref": 1, "cls": "Button",
+                             "bounds": [0, 0, 10, 10], "flags": ["clickable"]}])
+    sess = _FakeSession(
+        {"windows": [
+            {"id": 66, "title": "Notepad", "exePath": r"C:\Windows\notepad.exe",
+             "foreground": False},
+            {"id": 77, "title": "File Explorer", "exePath": r"C:\Windows\explorer.exe",
+             "foreground": True}]},
+        [in_scope], platform="windows")
+    ctl = _controller(sess, scope=[], follow=True)
+
+    obs = asyncio.run(ctl.first_observation())
+
+    assert sess.configured_scopes == [[r"C:\Windows\explorer.exe"]]  # the foreground window
+    assert obs.snapshot.version == 60
+
+
+def test_follow_prefers_aumid_for_uwp_windows_foreground():
+    # A UWP window carries an aumid; that IS its package identity (Win32 windows
+    # have only exePath). Prefer aumid when present, matching how the device
+    # reports pkg = aumid (UWP) / exePath (Win32).
+    snap = _snap(61, "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", None)
+    sess = _FakeSession(
+        {"windows": [{"id": 88, "title": "Calculator",
+                      "exePath": r"C:\Program Files\WindowsApps\...\Calculator.exe",
+                      "aumid": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+                      "foreground": True}]},
+        [snap], platform="windows")
+    ctl = _controller(sess, scope=[], follow=True)
+
+    asyncio.run(ctl.first_observation())
+
+    assert sess.configured_scopes == [["Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"]]
+
+
+def test_undeclared_platform_fails_loud_not_silent_default():
+    # A device that declares no platform we implement must fail loud — never fall
+    # back to guessing a window-model dialect (the exact fool-fallback we reject).
+    import pytest
+    from a11y.wire import DeviceError
+
+    snap = _snap(70, "com.bar.app", "com.bar.app/.Main")
+    sess = _FakeSession("com.bar.app", [snap], platform="")
+    ctl = _controller(sess, scope=[], follow=True)
+
+    with pytest.raises(DeviceError):
+        asyncio.run(ctl.first_observation())
