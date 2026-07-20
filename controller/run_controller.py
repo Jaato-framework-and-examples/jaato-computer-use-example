@@ -34,15 +34,14 @@ import asyncio
 import datetime
 import logging
 import os
-from contextlib import ExitStack
 from typing import List, Optional
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit import HTML
 
 from jaato_sdk import ClientType, EventType, IPCClient
 
 from a11y import annotate, config
+from a11y.console import SteerConsole
 from a11y.audit import AuditLog
 from a11y.controller import Controller
 from a11y.device_session import BridgeServer
@@ -79,47 +78,39 @@ def _observation_message(controller: Controller, first: bool,
     return "\n\n".join(parts), [attachment]
 
 
-# --- operator input (concurrent stdin) --------------------------------------
+# --- operator input ---------------------------------------------------------
 
-async def _operator_input_loop(session, client, steer_queue: "asyncio.Queue[str]",
-                               turn_active: dict, quit_event: asyncio.Event) -> None:
-    """Own stdin via a prompt_toolkit ``PromptSession`` so a single persistent
-    ``you>`` line stays pinned at the bottom while agent output scrolls above it
-    (the caller wraps the run in ``patch_stdout``). One always-waiting prompt is
-    what makes steering visible: the operator can type at ANY time, mid-turn or
-    idle — not only when the loop happens to hand back control.
+def _toolbar(turn_active: dict):
+    """State-reflecting bottom bar text (re-evaluated on every render)."""
+    if turn_active["on"]:
+        return HTML(" <b>⏳ agent working</b> — type to steer → "
+                    "<i>Enter injects into the running turn</i> ")
+    return HTML(" <b>▶ idle</b> — type a goal (or <i>/quit</i>) ")
 
-    Each submitted line is routed by whether a turn is in flight
-    (``turn_active["on"]``):
+
+async def _route_lines(console: SteerConsole, client, steer_queue: "asyncio.Queue[str]",
+                       turn_active: dict, quit_event: asyncio.Event) -> None:
+    """Drain each line the console submits and route it by whether a turn is in
+    flight (``turn_active["on"]``):
 
     - **turn in flight** -> ``client.inject_prompt(line, source_type="user")``:
       steered INTO the running turn (USER priority; the runner drains it at the
-      next ``screen_*`` boundary), so the model reacts mid-run. This is the point
-      of steering.
+      next ``screen_*`` boundary), so the model reacts mid-run — the point of
+      steering.
     - **idle** -> ``steer_queue``: an idle session does NOT run on an inject alone
       (the daemon queues it but nothing drives a turn), so an idle line instead
       unblocks the ``you>`` wait / folds into the next ``send_message``.
-
-    EOF (Ctrl-D), interrupt, or ``/quit``/``/exit`` set ``quit_event`` and end.
     """
     while not quit_event.is_set():
-        try:
-            line = await session.prompt_async("you> ")
-        except (EOFError, KeyboardInterrupt):
-            quit_event.set()
-            return
-        line = line.strip()
-        if not line:
-            continue
-        if line in ("/quit", "/exit"):
-            quit_event.set()
+        line = await _next_line(console.line_queue, quit_event)
+        if line is None:  # quit
             return
         if turn_active["on"]:
             try:
                 await client.inject_prompt(line, source_type="user")
-                print(f"[steering → folded into the running turn: {line!r}]")
+                console.write(f"[steering → folded into the running turn: {line!r}]")
             except Exception as exc:
-                print(f"[steering failed: {exc}]")
+                console.write(f"[steering failed: {exc}]")
         else:
             steer_queue.put_nowait(line)
 
@@ -150,9 +141,31 @@ async def run(initial_task: Optional[str], socket: str,
 
     bridge = BridgeServer(cfg.host, cfg.port, cfg.path, cfg.token, cfg.unsafe_no_auth)
     await bridge.start()
-    print(f"[bridge] listening on {cfg.listen_url} — point the device app's Daemon URL here")
+
+    steer_queue: "asyncio.Queue[str]" = asyncio.Queue()
+    quit_event = asyncio.Event()
+    # Flipped True only while a turn is in flight; the line router consults it to
+    # route a typed line to live steering (inject) vs the idle you> path (send).
+    turn_active = {"on": False}
+    # Full-screen console (interactive only): output scrolls above a pinned you>
+    # input + state toolbar. Started now so setup/"waiting for device" render live.
+    # --once is non-interactive: no console, output falls back to plain print.
+    console = SteerConsole(lambda: _toolbar(turn_active), quit_event) if not once else None
+    app_task = asyncio.ensure_future(console.run()) if console is not None else None
+    consumer_task: Optional["asyncio.Future"] = None
+
+    def emit(text: str = "", end: str = "\n") -> None:
+        """Route one line of UI output: into the console (interactive) or stdout
+        (--once). Every user-facing message goes through here so there is a single
+        output path regardless of mode."""
+        if console is not None:
+            console.write(text, end=end)
+        else:
+            print(text, end=end, flush=True)
+
     if cfg.unsafe_no_auth:
         logging.getLogger("a11y").warning("running with unsafe_no_auth — dev/loopback only")
+    emit(f"[bridge] listening on {cfg.listen_url} — point the device app's Daemon URL here")
 
     client = IPCClient(
         socket,
@@ -161,115 +174,100 @@ async def run(initial_task: Optional[str], socket: str,
         env_file=os.path.join(WORKSPACE, ".env"),  # absent -> daemon uses profile only
         workspace_path=WORKSPACE,
     )
-    if not await client.connect(timeout=120.0):
-        print("could not connect/autostart the daemon — run jaato-doctor")
-        return 1
 
-    print("[bridge] waiting for the device to dial in…")
-    session = await bridge.wait_for_device(timeout=None)
-    print(f"[bridge] device connected: {session.device_id} (sdk {session.hello.get('androidSdk')})")
-
-    audit = AuditLog(os.path.join(WORKSPACE, ".jaato", "logs", "a11y-audit.jsonl"),
-                     device_id=session.device_id)
-    # A pinned scope (non-empty package_scope) restricts authority to those
-    # packages; an empty scope follows the foreground app (auto re-scope).
-    follow_foreground = not cfg.package_scope
-    print(f"[bridge] scope: {'follow-foreground (auto re-scope)' if follow_foreground else 'pinned ' + str(cfg.package_scope)}")
-
-    async def reacquire(reason) -> Optional["object"]:
-        # The held session dropped — wait for the device to dial back in and hand
-        # the controller the newest bridge session (first-wins freed the slot).
-        # An operator DISCONNECT is announced distinctly from a bare network flap,
-        # but both resume by adopting the reconnected session. Bounded so a truly-
-        # gone device surfaces instead of blocking forever.
-        if reason == "user_disconnect":
-            print("\n[bridge] operator disconnected the device — reconnect it to resume…",
-                  flush=True)
-        else:
-            print("\n[bridge] device dropped — waiting for reconnect…", flush=True)
-        s = await bridge.wait_for_device(timeout=RECONNECT_TIMEOUT_S)
-        print(f"[bridge] device reconnected: {s.device_id}", flush=True)
-        return s
-
-    controller = Controller(session, audit, cfg.package_scope,
-                            cfg.screenshot_defaults, cfg.redaction, cfg.settle_ceiling_s,
-                            follow_foreground=follow_foreground, reacquire=reacquire)
-    await controller.configure()
-    await controller.first_observation()
-
-    await client.register_client_tools(build_tools(controller))
-
-    sid = await client.create_session(profile=PROFILE, agent=AGENT, timeout=60.0)
-    if not sid:
-        print("session.new failed — check provider auth (jaato-doctor) / the daemon log")
-        await client.disconnect()
-        return 1
-
-    turn_done = asyncio.Event()
-    client.subscribe(EventType.TURN_COMPLETED, lambda ev: turn_done.set())
-
-    # Agent text streams in chunks; prefix the first chunk of each turn with
-    # "agent> " (symmetric to the "you> " operator prompt) so its replies are
-    # visually distinct from the prompt and status lines.
-    turn_output = {"started": False}
-
-    def on_output(ev):
-        # Print only the agent's own voice. The daemon streams the prompt back
-        # as source="user" (the observation tree the model consumes) and emits
-        # tool/system chatter too; those are telemetry, not conversation, so the
-        # pane would otherwise interleave "Current screen: … nodes=N" dumps with
-        # the model's words. Keep model text + thinking; drop the rest.
-        if getattr(ev, "source", "") not in ("model", "thinking"):
-            return
-        text = getattr(ev, "text", "") or getattr(ev, "content", "")
-        if not text:
-            return
-        if not turn_output["started"]:
-            print("agent> ", end="", flush=True)
-            turn_output["started"] = True
-        print(text, end="", flush=True)
-    client.subscribe(EventType.AGENT_OUTPUT, on_output)
-
-    # Terminal detection, per the scaffold client template (_client_templates.py):
-    # this profile doesn't signal_completion, so a normal turn emits only
-    # TURN_COMPLETED and the session stays alive (IDLE). A terminal error — a
-    # provider 402/auth failure, a rate cap — arrives as SESSION_TERMINATED
-    # (reason="error", with error_type/error_summary) and KILLS the session.
-    # Subscribing to it too means the error unblocks the wait and is surfaced,
-    # instead of hanging on a TURN_COMPLETED that will never come.
-    terminated: dict = {}
-
-    def on_terminated(ev):
-        terminated["reason"] = getattr(ev, "reason", None) or "natural"
-        terminated["error_type"] = getattr(ev, "error_type", None)
-        terminated["error_summary"] = getattr(ev, "error_summary", None)
-        turn_done.set()
-    client.subscribe(EventType.SESSION_TERMINATED, on_terminated)
-
-    steer_queue: "asyncio.Queue[str]" = asyncio.Queue()
-    quit_event = asyncio.Event()
-    # Flipped True only while a turn is in flight; the input loop consults it to
-    # route a typed line to live steering (inject) vs the idle you> path (send).
-    turn_active = {"on": False}
-    input_task: Optional["asyncio.Future"] = None
-
-    pending_steer: List[str] = [initial_task] if initial_task else []
-    first = True
-    idle = False
     exit_code = 0
-
-    # patch_stdout keeps the persistent you> prompt pinned while agent output and
-    # status lines scroll above it — so the operator can type/steer at any time
-    # without their keystrokes tangling into the streamed model text. Interactive
-    # only: --once has no prompt and no patched stdout.
-    stack = ExitStack()
-    if not once:
-        stack.enter_context(patch_stdout())
-        session = PromptSession()
-        input_task = asyncio.ensure_future(
-            _operator_input_loop(session, client, steer_queue, turn_active, quit_event))
-
     try:
+        if not await client.connect(timeout=120.0):
+            emit("could not connect/autostart the daemon — run jaato-doctor")
+            return 1
+
+        if console is not None:
+            consumer_task = asyncio.ensure_future(
+                _route_lines(console, client, steer_queue, turn_active, quit_event))
+
+        async def reacquire(reason) -> Optional["object"]:
+            # The held session dropped — wait for the device to dial back in and
+            # hand the controller the newest bridge session (first-wins freed the
+            # slot). An operator DISCONNECT is announced distinctly from a bare
+            # network flap, but both resume by adopting the reconnected session.
+            # Bounded so a truly-gone device surfaces instead of blocking forever.
+            if reason == "user_disconnect":
+                emit("[bridge] operator disconnected the device — reconnect it to resume…")
+            else:
+                emit("[bridge] device dropped — waiting for reconnect…")
+            s = await bridge.wait_for_device(timeout=RECONNECT_TIMEOUT_S)
+            emit(f"[bridge] device reconnected: {s.device_id}")
+            return s
+
+        emit("[bridge] waiting for the device to dial in…")
+        session = await bridge.wait_for_device(timeout=None)
+        emit(f"[bridge] device connected: {session.device_id} (sdk {session.hello.get('androidSdk')})")
+
+        audit = AuditLog(os.path.join(WORKSPACE, ".jaato", "logs", "a11y-audit.jsonl"),
+                         device_id=session.device_id)
+        # A pinned scope (non-empty package_scope) restricts authority to those
+        # packages; an empty scope follows the foreground app (auto re-scope).
+        follow_foreground = not cfg.package_scope
+        emit(f"[bridge] scope: {'follow-foreground (auto re-scope)' if follow_foreground else 'pinned ' + str(cfg.package_scope)}")
+
+        controller = Controller(session, audit, cfg.package_scope,
+                                cfg.screenshot_defaults, cfg.redaction, cfg.settle_ceiling_s,
+                                follow_foreground=follow_foreground, reacquire=reacquire)
+        await controller.configure()
+        await controller.first_observation()
+
+        await client.register_client_tools(build_tools(controller))
+
+        sid = await client.create_session(profile=PROFILE, agent=AGENT, timeout=60.0)
+        if not sid:
+            emit("session.new failed — check provider auth (jaato-doctor) / the daemon log")
+            return 1
+
+        turn_done = asyncio.Event()
+        client.subscribe(EventType.TURN_COMPLETED, lambda ev: turn_done.set())
+
+        # Agent text streams in chunks; prefix the first chunk of each turn with
+        # "agent> " (symmetric to the "you> " operator prompt) so its replies are
+        # visually distinct from the prompt and status lines.
+        turn_output = {"started": False}
+
+        def on_output(ev):
+            # Show only the agent's own voice. The daemon streams the prompt back
+            # as source="user" (the observation tree the model consumes) and emits
+            # tool/system chatter too; those are telemetry, not conversation, so
+            # the pane would otherwise interleave "Current screen: … nodes=N" dumps
+            # with the model's words. Keep model text + thinking; drop the rest.
+            if getattr(ev, "source", "") not in ("model", "thinking"):
+                return
+            text = getattr(ev, "text", "") or getattr(ev, "content", "")
+            if not text:
+                return
+            if not turn_output["started"]:
+                emit("agent> ", end="")
+                turn_output["started"] = True
+            emit(text, end="")
+        client.subscribe(EventType.AGENT_OUTPUT, on_output)
+
+        # Terminal detection, per the scaffold client template (_client_templates.py):
+        # this profile doesn't signal_completion, so a normal turn emits only
+        # TURN_COMPLETED and the session stays alive (IDLE). A terminal error — a
+        # provider 402/auth failure, a rate cap — arrives as SESSION_TERMINATED
+        # (reason="error", with error_type/error_summary) and KILLS the session.
+        # Subscribing to it too means the error unblocks the wait and is surfaced,
+        # instead of hanging on a TURN_COMPLETED that will never come.
+        terminated: dict = {}
+
+        def on_terminated(ev):
+            terminated["reason"] = getattr(ev, "reason", None) or "natural"
+            terminated["error_type"] = getattr(ev, "error_type", None)
+            terminated["error_summary"] = getattr(ev, "error_summary", None)
+            turn_done.set()
+        client.subscribe(EventType.SESSION_TERMINATED, on_terminated)
+
+        pending_steer: List[str] = [initial_task] if initial_task else []
+        first = True
+        idle = False
+
         for step in range(cfg.max_steps):
             # Return control to the operator when there's nothing in flight:
             # before the first turn with no task, after completion, or after a stall.
@@ -279,8 +277,8 @@ async def run(initial_task: Optional[str], socket: str,
                     if controller.done:
                         exit_code = 0
                     break
-                # No prompt print here: the PromptSession keeps a persistent you>
-                # line pinned at the bottom. An idle line arrives via steer_queue.
+                # The console keeps a persistent you> line; an idle line arrives
+                # via steer_queue (the router forwards idle lines there).
                 line = await _next_line(steer_queue, quit_event)
                 if line is None:
                     break
@@ -295,7 +293,7 @@ async def run(initial_task: Optional[str], socket: str,
                 try:
                     await controller.first_observation()
                 except Exception as exc:
-                    print(f"[bridge] couldn't refresh the screen: {exc}")
+                    emit(f"[bridge] couldn't refresh the screen: {exc}")
 
             pending_steer.extend(_drain(steer_queue))  # fold any typed-ahead lines
             text, attachments = _observation_message(controller, first, pending_steer)
@@ -308,13 +306,14 @@ async def run(initial_task: Optional[str], socket: str,
 
             turn_active["on"] = True   # operator lines now steer INTO this turn
             try:
-                done, _ = await asyncio.wait(
+                await asyncio.wait(
                     {asyncio.ensure_future(turn_done.wait()),
                      asyncio.ensure_future(quit_event.wait())},
                     return_when=asyncio.FIRST_COMPLETED)
             finally:
                 turn_active["on"] = False  # back to the idle you> path
-            print()
+            if turn_output["started"]:
+                emit("")  # close the streamed agent> line
             if quit_event.is_set() and not turn_done.is_set():
                 break
 
@@ -323,16 +322,16 @@ async def run(initial_task: Optional[str], socket: str,
                 # or a natural completion. It can't take another message, so
                 # surface it and exit rather than hang or loop on a dead session.
                 if terminated.get("reason") == "error":
-                    print(f"[error] {terminated.get('error_type')}: "
-                          f"{terminated.get('error_summary')}")
+                    emit(f"[error] {terminated.get('error_type')}: "
+                         f"{terminated.get('error_summary')}")
                     exit_code = 1
                 else:
-                    print(f"[session ended: {terminated.get('reason')}]")
+                    emit(f"[session ended: {terminated.get('reason')}]")
                 break
 
             first = False
             if controller.done:
-                print(f"[done] {controller.done_summary}")
+                emit(f"[done] {controller.done_summary}")
                 if once:
                     break
                 continue
@@ -340,17 +339,20 @@ async def run(initial_task: Optional[str], socket: str,
             # (each action fed back the fresh screenshot as a tool result), so a
             # completed turn hands back to the operator for the next instruction.
             if not controller.acted_this_turn:
-                print("[turn done — your turn (type an instruction or /quit)]")
+                emit("[turn done — your turn (type an instruction or /quit)]")
             else:
-                print("[turn done — your turn, or say 'continue']")
+                emit("[turn done — your turn, or say 'continue']")
             idle = True
         else:
-            print(f"[loop] reached max_steps={cfg.max_steps}")
+            emit(f"[loop] reached max_steps={cfg.max_steps}")
     finally:
         quit_event.set()
-        if input_task is not None:
-            input_task.cancel()
-        stack.close()  # exits patch_stdout, restoring the plain terminal
+        if consumer_task is not None:
+            consumer_task.cancel()
+        if console is not None:
+            console.stop()          # exit the full-screen app, restore the terminal
+        if app_task is not None:
+            app_task.cancel()
         await bridge.stop()
         await client.disconnect()
     return exit_code
