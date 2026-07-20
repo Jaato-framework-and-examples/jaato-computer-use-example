@@ -107,6 +107,13 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
         # returns just the window list, not a fresh set-of-marks bundle.
         return {"result": windows_text(await controller.list_windows())}
 
+    async def screen_start_menu(args: dict) -> dict:
+        # GLOBAL START_MENU (Windows key) opens Start with search focused from any
+        # window — the reliable "reach the shell" step. Returns the fresh screen
+        # (Start is now foreground) so the model can type + pick a result.
+        ack = await controller.global_action("START_MENU")
+        return _screen_result(controller, ack)
+
     async def screen_done(args: dict) -> dict:
         return {"result": controller.mark_done(str(args.get("summary", "")))}
 
@@ -202,6 +209,15 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
                            "not the machine — use this to see everything that's open.",
             "parameters": {"type": "object", "properties": {}},
             "handler": screen_windows,
+        })
+        specs.append({
+            "name": "screen_start_menu",
+            "description": "Open the Windows Start menu (search box auto-focused) "
+                           "from ANY window — the reliable way to launch an app, no "
+                           "need to find or tap the taskbar. After it opens, "
+                           "screen_type the app name, then screen_tap the top result.",
+            "parameters": {"type": "object", "properties": {}},
+            "handler": screen_start_menu,
         })
     elif controller.platform == "android":
         # BACK/HOME/RECENTS are Android globals; Windows has no equivalents, so

@@ -227,7 +227,15 @@ _SCROLL_DIRECTIONS = {
     "left": "SCROLL_LEFT", "right": "SCROLL_RIGHT",
 }
 _GLOBALS = frozenset(
-    {"BACK", "HOME", "RECENTS", "NOTIFICATIONS", "QUICK_SETTINGS", "LOCK_SCREEN"}
+    # Android system globals + the Windows desktop globals (04-DEVICE_DESIGN §11).
+    # The wire mirror lists every global the device MAY accept; which the daemon
+    # actually sends (via which host tools) is per-platform policy — e.g. HOME is
+    # Android-only, START_MENU is Windows-only. START_MENU sends the Windows key,
+    # opening Start with search auto-focused from ANY window — the reliable "reach
+    # the shell" primitive the Windows launch flow needs. The rest of the Windows
+    # set is mirrored for when the broader window-navigation tools land.
+    {"BACK", "HOME", "RECENTS", "NOTIFICATIONS", "QUICK_SETTINGS", "LOCK_SCREEN",
+     "START_MENU", "SHOW_DESKTOP", "SWITCH_WINDOW", "MINIMIZE_ALL", "CLOSE_WINDOW"}
 )
 
 

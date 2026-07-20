@@ -311,3 +311,17 @@ def test_build_tools_gates_nav_by_platform():
     assert {"screen_home", "screen_recents", "screen_back"} <= andr
     assert "screen_windows" not in andr
     assert common <= win and common <= andr
+
+
+def test_start_menu_global_and_windows_tool():
+    """START_MENU is a valid wire global (Windows key -> Start w/ search focused);
+    screen_start_menu is exposed only on Windows."""
+    from a11y.protocol import Action
+    assert Action.global_("START_MENU").global_action == "START_MENU"
+    from a11y.host_tools import build_tools
+
+    class _Ctl:
+        def __init__(self, p): self.platform = p
+
+    assert "screen_start_menu" in {s["name"] for s in build_tools(_Ctl("windows"))}
+    assert "screen_start_menu" not in {s["name"] for s in build_tools(_Ctl("android"))}
