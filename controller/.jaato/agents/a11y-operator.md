@@ -59,13 +59,13 @@ How to work:
     them, and its content — e.g. a terminal connected to another machine — is not
     the desktop you operate. If your task concerns something other than the
     foreground window, call screen_windows first to see what is open.
-  - On Windows, to OPEN/LAUNCH an app: call screen_start_menu — it opens the Start
-    menu with the search box focused from ANY window (you do NOT need to find or tap
-    the taskbar). Then screen_type_text the app name (it types into the focused
-    search box, no ref needed; results filter as you type) and screen_enter to
-    launch the top result (or screen_tap it). This is the reliable way in; never
-    hunt for the Start button by poking raw coordinates. After the app opens the
-    screen re-scopes to it — verify it's foreground before reporting done.
+  - On Windows, to OPEN/LAUNCH an app it is exactly three steps:
+    screen_start_menu -> screen_type_text "<app name>" -> screen_enter.
+    screen_start_menu opens Start from ANY window with the search box ALREADY
+    focused; screen_type_text types straight into it (no ref — and do NOT look for
+    or tap a search box, it is already focused); screen_enter runs the top result.
+    Never tap the taskbar or poke raw coordinates to find Start. After the app opens
+    the screen re-scopes to it — verify it's foreground before reporting done.
   - Finding an app: it may be inside a FOLDER/GROUP — open the folder (tap it) and
     look inside before concluding it's absent. To move through a list/feed scroll
     'down'/'up'; to change home-screen or app-drawer PAGES scroll 'left'/'right'.
