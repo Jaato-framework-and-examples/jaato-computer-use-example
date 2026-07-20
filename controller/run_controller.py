@@ -10,10 +10,12 @@ settle -> recover -> re-observe) and returns the fresh set-of-marks screenshot a
 its own tool result, so the model sees each effect and acts again within the turn.
 
 Interaction is **mid-run steering**: the agent drives autonomously toward the
-standing task, but you can type a new instruction or correction at any time and
-it is folded into the agent's next turn. When the agent finishes (``screen_done``)
-or stalls (a turn with no action), control returns to your prompt. Type ``/quit``
-to exit.
+standing task, but you can type a new instruction or correction at any time —
+while a turn is running it is injected INTO that turn (USER priority; the runner
+drains it at the next action boundary), so the agent adapts without waiting for
+the turn to end; while idle, your line starts the next turn. When the agent
+finishes (``screen_done``) or stalls (a turn with no action), control returns to
+your prompt. Type ``/quit`` to exit.
 
 Config:
 - LLM provider/model/key: ``.jaato/profiles/a11y-controller.yaml`` (a jaato profile)
@@ -77,8 +79,9 @@ def _observation_message(controller: Controller, first: bool,
 # --- operator input (concurrent stdin) --------------------------------------
 
 def _install_stdin_reader(loop, steer_queue: "asyncio.Queue[str]",
-                          quit_event: asyncio.Event) -> None:
-    """Feed operator lines into ``steer_queue`` via the event loop's own selector
+                          inject_queue: "asyncio.Queue[str]",
+                          turn_active: dict, quit_event: asyncio.Event) -> None:
+    """Feed operator lines into the event loop via its own selector
     (``add_reader``) — NOT a ``run_in_executor(sys.stdin.readline)`` thread. A
     blocking readline runs on the default executor, whose non-daemon threads
     ``asyncio.run`` joins at shutdown; when the loop exits on a terminal error
@@ -86,7 +89,17 @@ def _install_stdin_reader(loop, steer_queue: "asyncio.Queue[str]",
     process exit ~300s. Reading the fd through the selector uses no thread, so
     exit is immediate. POSIX stdin is line-buffered (cooked mode), so each
     readable event delivers whole lines. ``/quit``/``/exit`` or EOF set
-    ``quit_event``."""
+    ``quit_event``.
+
+    A typed line is routed by whether a turn is in flight (``turn_active["on"]``):
+    - **turn in flight -> ``inject_queue``**: steered INTO the running turn via
+      ``inject_prompt`` (USER priority). The runner drains it at the turn's next
+      safe point (between ``screen_*`` actions), so the model reacts mid-run —
+      this is the whole point of steering.
+    - **idle -> ``steer_queue``**: an idle session does NOT run on an inject alone
+      (the daemon queues it but nothing drives a turn), so an idle line instead
+      unblocks the ``you>`` wait / folds into the next ``send_message``.
+    """
     fd = sys.stdin.fileno()
     buf = {"pending": ""}
 
@@ -108,7 +121,7 @@ def _install_stdin_reader(loop, steer_queue: "asyncio.Queue[str]",
             if line in ("/quit", "/exit"):
                 quit_event.set()
                 return
-            steer_queue.put_nowait(line)
+            (inject_queue if turn_active["on"] else steer_queue).put_nowait(line)
 
     loop.add_reader(fd, _on_readable)
 
@@ -237,11 +250,39 @@ async def run(initial_task: Optional[str], socket: str,
 
     loop = asyncio.get_event_loop()
     steer_queue: "asyncio.Queue[str]" = asyncio.Queue()
+    inject_queue: "asyncio.Queue[str]" = asyncio.Queue()
     quit_event = asyncio.Event()
+    # Flipped True only while a turn is in flight; the stdin reader consults it to
+    # route a typed line to live steering (inject) vs the idle you> path (send).
+    turn_active = {"on": False}
+    steer_task: Optional["asyncio.Future"] = None
     stdin_reading = False
     if not once:
-        _install_stdin_reader(loop, steer_queue, quit_event)
+        _install_stdin_reader(loop, steer_queue, inject_queue, turn_active, quit_event)
         stdin_reading = True
+
+        async def _steer_consumer() -> None:
+            """Forward operator lines typed DURING a turn into that running turn as
+            USER-priority steering: ``inject_prompt`` queues into the runner's
+            inject buffer, which the in-flight turn drains at its next safe point
+            (between actions), so the model reacts mid-run instead of at turn end.
+            If the turn ended between the keypress and here, re-route to the idle
+            path — an idle session won't run on an inject alone."""
+            while True:
+                line = await _next_line(inject_queue, quit_event)
+                if line is None:  # quit
+                    return
+                if not turn_active["on"]:
+                    steer_queue.put_nowait(line)  # turn ended in the gap; idle path
+                    continue
+                try:
+                    await client.inject_prompt(line, source_type="user")
+                    print(f"\n[steering → folded into the running turn: {line!r}]",
+                          flush=True)
+                except Exception as exc:
+                    print(f"\n[steering failed: {exc}]", flush=True)
+
+        steer_task = asyncio.ensure_future(_steer_consumer())
 
     pending_steer: List[str] = [initial_task] if initial_task else []
     first = True
@@ -284,10 +325,14 @@ async def run(initial_task: Optional[str], socket: str,
             controller.begin_turn()
             await client.send_message(text, attachments=attachments, parallel_tools=False)
 
-            done, _ = await asyncio.wait(
-                {asyncio.ensure_future(turn_done.wait()),
-                 asyncio.ensure_future(quit_event.wait())},
-                return_when=asyncio.FIRST_COMPLETED)
+            turn_active["on"] = True   # operator lines now steer INTO this turn
+            try:
+                done, _ = await asyncio.wait(
+                    {asyncio.ensure_future(turn_done.wait()),
+                     asyncio.ensure_future(quit_event.wait())},
+                    return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                turn_active["on"] = False  # back to the idle you> path
             print()
             if quit_event.is_set() and not turn_done.is_set():
                 break
@@ -322,6 +367,8 @@ async def run(initial_task: Optional[str], socket: str,
             print(f"[loop] reached max_steps={cfg.max_steps}")
     finally:
         quit_event.set()
+        if steer_task is not None:
+            steer_task.cancel()
         if stdin_reading:
             try:
                 loop.remove_reader(sys.stdin.fileno())
