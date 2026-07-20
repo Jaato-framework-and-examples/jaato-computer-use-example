@@ -241,6 +241,15 @@ class Controller:
         """Perform a GLOBAL action (BACK/HOME/RECENTS). No selector target."""
         return await self._act_and_settle(Selector(), Action.global_(name), None)
 
+    async def type_text(self, text: str) -> str:
+        """Focus-directed text input (Windows TYPE_TEXT). No selector target — the
+        device types into whatever holds keyboard focus."""
+        return await self._act_and_settle(Selector(), Action.type_text(text), None)
+
+    async def press_key(self, key: str) -> str:
+        """Focus-directed key press (Windows PRESS_KEY, e.g. ENTER). No target."""
+        return await self._act_and_settle(Selector(), Action.press_key(key), None)
+
     async def gesture(self, path: List[List[int]], duration_ms: int) -> str:
         """Raw gesture escape hatch (a swipe/tap by coordinate)."""
         xs = [p[0] for p in path]

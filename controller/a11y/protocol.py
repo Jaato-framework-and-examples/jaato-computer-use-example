@@ -220,6 +220,14 @@ _ACTIONS = frozenset(
      # imeOptions) -> ACTION_IME_ENTER. The a11y-native way to submit a typed field
      # (key injection isn't available to an a11y service); needs the field focused.
      "IME_ENTER",
+     # Focus-DIRECTED input (04-DEVICE_DESIGN §11), as opposed to the node-directed
+     # SET_TEXT/IME_ENTER which resolve a ref first: these act on whatever holds
+     # keyboard focus, with NO ref/target. TYPE_TEXT carries `text`, PRESS_KEY
+     # carries `key`. Windows-only by design — a Windows bridge injects via
+     # SendInput; an Android AccessibilityService cannot inject keys at all. This
+     # is what makes the Start-menu launch bulletproof: START_MENU auto-focuses the
+     # search box, so typing needs no ValuePattern and no ref.
+     "TYPE_TEXT", "PRESS_KEY",
      "FOCUS", "GESTURE", "GLOBAL"}
 )
 _SCROLL_DIRECTIONS = {
@@ -243,20 +251,24 @@ _GLOBALS = frozenset(
 class Action:
     """An ``act`` payload's action portion (§11).
 
-    Exactly one shape applies: ``SET_TEXT`` carries ``text``; ``GESTURE`` carries
-    a ``gesture`` dict; ``GLOBAL`` carries a ``global`` name; the rest are bare.
+    Exactly one shape applies: ``SET_TEXT``/``TYPE_TEXT`` carry ``text``;
+    ``PRESS_KEY`` carries ``key``; ``GESTURE`` carries a ``gesture`` dict;
+    ``GLOBAL`` carries a ``global`` name; the rest are bare.
     """
 
     action: str
     text: Optional[str] = None
     gesture: Optional[dict] = None
     global_action: Optional[str] = None
+    key: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.action not in _ACTIONS:
             raise ValueError(f"unknown action: {self.action!r}")
-        if self.action == "SET_TEXT" and self.text is None:
-            raise ValueError("SET_TEXT requires text")
+        if self.action in ("SET_TEXT", "TYPE_TEXT") and self.text is None:
+            raise ValueError(f"{self.action} requires text")
+        if self.action == "PRESS_KEY" and not self.key:
+            raise ValueError("PRESS_KEY requires a key")
         if self.action == "GESTURE" and not self.gesture:
             raise ValueError("GESTURE requires a gesture")
         if self.action == "GLOBAL":
@@ -299,6 +311,21 @@ class Action:
         return cls("IME_ENTER")
 
     @classmethod
+    def type_text(cls, text: str) -> "Action":
+        """Focus-directed unicode input -> the Windows bridge's SendInput into the
+        currently focused element. NO ref/target and NO ValuePattern needed —
+        distinct from SET_TEXT, which resolves a node ref. Windows-only (an Android
+        AccessibilityService cannot inject keys). NOT_ACTIONABLE if nothing has
+        focus; pair with START_MENU (which auto-focuses the search box)."""
+        return cls("TYPE_TEXT", text=text)
+
+    @classmethod
+    def press_key(cls, key: str) -> "Action":
+        """Focus-directed key press -> SendInput of ``key`` (e.g. "ENTER") on the
+        focused element. Windows-only; NOT_ACTIONABLE if nothing has focus."""
+        return cls("PRESS_KEY", key=key)
+
+    @classmethod
     def global_(cls, name: str) -> "Action":
         return cls("GLOBAL", global_action=name)
 
@@ -319,6 +346,8 @@ class Action:
             args["gesture"] = self.gesture
         if self.global_action is not None:
             args["global"] = self.global_action
+        if self.key is not None:
+            args["key"] = self.key
         return args
 
 

@@ -114,6 +114,16 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
         ack = await controller.global_action("START_MENU")
         return _screen_result(controller, ack)
 
+    async def screen_type_text(args: dict) -> dict:
+        # Focus-directed: types into whatever holds keyboard focus, no ref needed
+        # (e.g. the Start search box after screen_start_menu).
+        ack = await controller.type_text(str(args["text"]))
+        return _screen_result(controller, ack)
+
+    async def screen_enter(args: dict) -> dict:
+        ack = await controller.press_key("ENTER")
+        return _screen_result(controller, ack)
+
     async def screen_done(args: dict) -> dict:
         return {"result": controller.mark_done(str(args.get("summary", "")))}
 
@@ -215,9 +225,29 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
             "description": "Open the Windows Start menu (search box auto-focused) "
                            "from ANY window — the reliable way to launch an app, no "
                            "need to find or tap the taskbar. After it opens, "
-                           "screen_type the app name, then screen_tap the top result.",
+                           "screen_type_text the app name, then screen_enter (or tap "
+                           "the top result).",
             "parameters": {"type": "object", "properties": {}},
             "handler": screen_start_menu,
+        })
+        specs.append({
+            "name": "screen_type_text",
+            "description": "Type text into the currently FOCUSED element (Windows). "
+                           "Unlike screen_type it needs no ref — it types wherever "
+                           "keyboard focus is (e.g. the Start search box right after "
+                           "screen_start_menu). NOT_ACTIONABLE if nothing is focused.",
+            "parameters": {"type": "object",
+                           "properties": {"text": {"type": "string"}},
+                           "required": ["text"]},
+            "handler": screen_type_text,
+        })
+        specs.append({
+            "name": "screen_enter",
+            "description": "Press Enter on the focused element (Windows) — e.g. to "
+                           "launch the highlighted Start search result, or submit a "
+                           "focused field. Needs no ref.",
+            "parameters": {"type": "object", "properties": {}},
+            "handler": screen_enter,
         })
     elif controller.platform == "android":
         # BACK/HOME/RECENTS are Android globals; Windows has no equivalents, so

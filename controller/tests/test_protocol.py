@@ -325,3 +325,26 @@ def test_start_menu_global_and_windows_tool():
 
     assert "screen_start_menu" in {s["name"] for s in build_tools(_Ctl("windows"))}
     assert "screen_start_menu" not in {s["name"] for s in build_tools(_Ctl("android"))}
+
+
+def test_focus_directed_input_actions():
+    """TYPE_TEXT/PRESS_KEY are focus-directed (no ref); wire shape is text/key
+    (matches 01 §11.1); tools are Windows-gated."""
+    import pytest
+    from a11y.protocol import Action
+    assert Action.type_text("Notepad").merge_into({}) == {"action": "TYPE_TEXT", "text": "Notepad"}
+    assert Action.press_key("ENTER").merge_into({}) == {"action": "PRESS_KEY", "key": "ENTER"}
+    with pytest.raises(ValueError):
+        Action("TYPE_TEXT")   # requires text
+    with pytest.raises(ValueError):
+        Action("PRESS_KEY")   # requires key
+
+    from a11y.host_tools import build_tools
+
+    class _Ctl:
+        def __init__(self, p): self.platform = p
+
+    win = {s["name"] for s in build_tools(_Ctl("windows"))}
+    andr = {s["name"] for s in build_tools(_Ctl("android"))}
+    assert {"screen_type_text", "screen_enter"} <= win
+    assert not ({"screen_type_text", "screen_enter"} & andr)
