@@ -165,12 +165,6 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
                            "required": ["ref"]},
             "handler": screen_submit,
         },
-        {"name": "screen_back", "description": "Press the system Back button.",
-         "parameters": {"type": "object", "properties": {}}, "handler": screen_back},
-        {"name": "screen_home", "description": "Go to the Home screen.",
-         "parameters": {"type": "object", "properties": {}}, "handler": screen_home},
-        {"name": "screen_recents", "description": "Open the Recents (app switcher).",
-         "parameters": {"type": "object", "properties": {}}, "handler": screen_recents},
         {
             "name": "screen_gesture",
             "description": "Escape hatch: dispatch a raw gesture by screen-pixel coordinates. "
@@ -192,11 +186,14 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
                         "required": ["summary"]},
          "handler": screen_done},
     ]
+    # Platform-gated navigation. The system-nav globals differ per platform, so a
+    # tool that maps to a global one platform lacks would only ever return
+    # NOT_ACTIONABLE (observed: screen_home -> "unknown global 'HOME'" on Windows).
+    # Offer each device only the globals it actually implements.
     if controller.platform == "windows":
         # Windows is a multi-window desktop: without this the model sees only the
         # scoped foreground window and mis-reads the machine from its content (an
-        # SSH terminal -> "I'm on Linux"). Android's single-foreground model needs
-        # no such tool, so it's gated to the declared platform.
+        # SSH terminal -> "I'm on Linux").
         specs.append({
             "name": "screen_windows",
             "description": "List every top-level window on the Windows desktop "
@@ -206,6 +203,17 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
             "parameters": {"type": "object", "properties": {}},
             "handler": screen_windows,
         })
+    elif controller.platform == "android":
+        # BACK/HOME/RECENTS are Android globals; Windows has no equivalents, so
+        # these are Android-only (a Windows device would reject all three).
+        specs.extend([
+            {"name": "screen_back", "description": "Press the system Back button.",
+             "parameters": {"type": "object", "properties": {}}, "handler": screen_back},
+            {"name": "screen_home", "description": "Go to the Home screen.",
+             "parameters": {"type": "object", "properties": {}}, "handler": screen_home},
+            {"name": "screen_recents", "description": "Open the Recents (app switcher).",
+             "parameters": {"type": "object", "properties": {}}, "handler": screen_recents},
+        ])
     for spec in specs:
         spec["handler"] = _logged(spec["name"], spec["handler"])
     return specs

@@ -289,3 +289,25 @@ def test_windows_text_lists_and_marks_foreground():
     fg = [ln for ln in out.splitlines() if "[FOREGROUND]" in ln]
     assert len(fg) == 1 and "MobaXterm.exe" in fg[0]  # exactly the foreground one
     assert "no top-level windows" in windows_text({"windows": []})
+
+
+def test_build_tools_gates_nav_by_platform():
+    """Android system-nav tools (back/home/recents) are Android-only; screen_windows
+    is Windows-only. A tool mapping to a global the platform lacks would only ever
+    return NOT_ACTIONABLE, so it must not be offered there."""
+    from a11y.host_tools import build_tools
+
+    class _Ctl:
+        def __init__(self, platform):
+            self.platform = platform
+
+    common = {"screen_tap", "screen_type", "screen_scroll", "screen_submit",
+              "screen_gesture", "screen_wait", "screen_done"}
+    win = {s["name"] for s in build_tools(_Ctl("windows"))}
+    andr = {s["name"] for s in build_tools(_Ctl("android"))}
+
+    assert "screen_windows" in win
+    assert not ({"screen_home", "screen_recents", "screen_back"} & win)
+    assert {"screen_home", "screen_recents", "screen_back"} <= andr
+    assert "screen_windows" not in andr
+    assert common <= win and common <= andr
