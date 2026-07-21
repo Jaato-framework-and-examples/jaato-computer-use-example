@@ -13,6 +13,7 @@ from a pure-conversation one — it no longer refuses multiple actions.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Awaitable, Callable, List, Optional
 
@@ -60,6 +61,9 @@ class Controller:
         self._acted_this_turn = False
         self.done = False
         self.done_summary = ""
+        # Serializes device acts so a MODEL-batched turn (parallel_tools) runs its
+        # actions one at a time, in emission order. See _act_and_settle.
+        self._act_lock = asyncio.Lock()
 
     # -- lifecycle -----------------------------------------------------------
     async def configure(self) -> None:
@@ -278,8 +282,23 @@ class Controller:
 
     # -- internals -----------------------------------------------------------
     async def _act_and_settle(self, selector: Selector, action: Action,
-                             node_bounds: Optional[List[int]],
-                             stable_selector: Optional[Selector] = None) -> str:
+                              node_bounds: Optional[List[int]],
+                              stable_selector: Optional[Selector] = None) -> str:
+        """Serialize every device act through one lock, so a MODEL-batched turn
+        (``parallel_tools``) runs its actions one at a time, in the order the model
+        emitted them. The SDK dispatches each host-tool call as its own task
+        (``create_task``), so a batch would otherwise race; ``asyncio.Lock`` is
+        FIFO and this ``acquire`` is the first await on every act path, so it both
+        enforces the device's one-action-outstanding invariant AND preserves batch
+        order. No orchestration lives in a command — the lock only serializes the
+        model's own primitives (the launch/close sequences the model composes)."""
+        async with self._act_lock:
+            return await self._act_and_settle_locked(
+                selector, action, node_bounds, stable_selector)
+
+    async def _act_and_settle_locked(self, selector: Selector, action: Action,
+                                     node_bounds: Optional[List[int]],
+                                     stable_selector: Optional[Selector] = None) -> str:
         """The core cycle (03 §3): act, await settle (with recovery), adapt the
         settle policy from the outcome, re-observe, audit, and return an ack."""
         self._acted_this_turn = True

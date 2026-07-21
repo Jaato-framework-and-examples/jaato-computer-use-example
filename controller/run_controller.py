@@ -328,7 +328,13 @@ async def run(initial_task: Optional[str], socket: str,
             turn_done.clear()
             turn_output["started"] = False
             controller.begin_turn()
-            await client.send_message(text, attachments=attachments, parallel_tools=False)
+            # parallel_tools=True lets the MODEL batch several primitives in one
+            # turn (e.g. start_menu -> type_text -> enter), collapsing the ~8-70s
+            # per-action think latency for sequences it's sure of. The device acts
+            # still run one at a time, in order: the controller serializes them
+            # through a single FIFO lock (Controller._act_and_settle). No wrapper
+            # command — the model composes its own primitives.
+            await client.send_message(text, attachments=attachments, parallel_tools=True)
 
             turn_active["on"] = True   # operator lines now steer INTO this turn
             try:
