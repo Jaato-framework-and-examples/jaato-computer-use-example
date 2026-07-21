@@ -24,30 +24,36 @@ class _Settled:
 
 
 class _RecordingSession:
-    """Fake device session that flags overlapping acts and records act order."""
+    """Fake device session that flags overlap across the WHOLE act op (send AND
+    settle AND reobserve) and records act order. ``in_op`` is held from the act
+    frame through the settle wait until reobserve, so if the lock released after
+    send — letting act2 fire during act1's settle (the type-before-focus race) —
+    it would be caught as an overlap. ``await_settled`` sleeps to widen that
+    window, so a lock that stopped at 'send' would fail this test."""
 
     def __init__(self):
         self.current_snapshot = _snap(1)
         self.alive = True
-        self.in_act = False
+        self.in_op = False
         self.overlaps = 0
         self.order = []
         self._v = 1
 
     async def act(self, selector, action):
-        if self.in_act:
-            self.overlaps += 1          # two acts in flight => serialization broke
-        self.in_act = True
+        if self.in_op:                   # a prior op's send/settle still in flight
+            self.overlaps += 1
+        self.in_op = True
         self.order.append(action.text or action.global_action or action.action)
-        await asyncio.sleep(0.01)        # simulate device work; yields the loop
-        self.in_act = False
+        await asyncio.sleep(0.005)        # simulate the send actuating
 
     async def await_settled(self, timeout):
+        await asyncio.sleep(0.01)         # settle wait — must still be under the lock
         self._v += 1
         return _Settled("quiet", self._v)
 
     async def observe(self, screenshot=True, screenshot_params=None):
         self.current_snapshot = _snap(self._v)
+        self.in_op = False               # reobserve is the last step under the lock
         return Observation(snapshot=self.current_snapshot, image=None)
 
     async def configure(self, *a, **k):
