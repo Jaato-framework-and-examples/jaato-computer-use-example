@@ -124,6 +124,17 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
         ack = await controller.press_key("ENTER")
         return _screen_result(controller, ack)
 
+    async def screen_close_window(args: dict) -> dict:
+        # CLOSE_WINDOW (Alt+F4) closes the FOREGROUND window.
+        ack = await controller.global_action("CLOSE_WINDOW")
+        return _screen_result(controller, ack)
+
+    async def screen_switch_window(args: dict) -> dict:
+        # SWITCH_WINDOW (Alt+Tab) switches to the previous window; call again to
+        # keep cycling until the target is foreground.
+        ack = await controller.global_action("SWITCH_WINDOW")
+        return _screen_result(controller, ack)
+
     async def screen_done(args: dict) -> dict:
         return {"result": controller.mark_done(str(args.get("summary", "")))}
 
@@ -248,6 +259,24 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
                            "focused field. Needs no ref.",
             "parameters": {"type": "object", "properties": {}},
             "handler": screen_enter,
+        })
+        specs.append({
+            "name": "screen_close_window",
+            "description": "Close the FOREGROUND window (Windows, Alt+F4). Use this "
+                           "to close an app — first make the target its foreground "
+                           "window (it's foreground right after you open it). This is "
+                           "how you CLOSE an app; do NOT open Start and type its name.",
+            "parameters": {"type": "object", "properties": {}},
+            "handler": screen_close_window,
+        })
+        specs.append({
+            "name": "screen_switch_window",
+            "description": "Switch to the previous window (Windows, Alt+Tab) to bring "
+                           "another open window to the foreground. Call again to keep "
+                           "cycling; check the screen header each time until your "
+                           "target window is foreground (screen_windows lists them).",
+            "parameters": {"type": "object", "properties": {}},
+            "handler": screen_switch_window,
         })
     elif controller.platform == "android":
         # BACK/HOME/RECENTS are Android globals; Windows has no equivalents, so

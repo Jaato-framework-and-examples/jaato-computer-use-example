@@ -348,3 +348,21 @@ def test_focus_directed_input_actions():
     andr = {s["name"] for s in build_tools(_Ctl("android"))}
     assert {"screen_type_text", "screen_enter"} <= win
     assert not ({"screen_type_text", "screen_enter"} & andr)
+
+
+def test_close_switch_window_tools_windows_gated():
+    """screen_close_window/screen_switch_window are Windows-only and map to the
+    CLOSE_WINDOW/SWITCH_WINDOW globals (already in the wire mirror)."""
+    from a11y.protocol import Action
+    assert Action.global_("CLOSE_WINDOW").global_action == "CLOSE_WINDOW"
+    assert Action.global_("SWITCH_WINDOW").global_action == "SWITCH_WINDOW"
+
+    from a11y.host_tools import build_tools
+
+    class _Ctl:
+        def __init__(self, p): self.platform = p
+
+    win = {s["name"] for s in build_tools(_Ctl("windows"))}
+    andr = {s["name"] for s in build_tools(_Ctl("android"))}
+    assert {"screen_close_window", "screen_switch_window"} <= win
+    assert not ({"screen_close_window", "screen_switch_window"} & andr)

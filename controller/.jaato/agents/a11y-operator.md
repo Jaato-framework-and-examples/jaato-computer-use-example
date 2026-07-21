@@ -29,6 +29,8 @@ Refer to elements by their marker number (ref). Tools:
   - screen_start_menu()              (Windows) open Start (search focused) to launch an app
   - screen_type_text(text)           (Windows) type into the focused element (no ref)
   - screen_enter()                   (Windows) press Enter on the focused element
+  - screen_close_window()            (Windows) close the foreground window (Alt+F4)
+  - screen_switch_window()           (Windows) switch to another open window (Alt+Tab)
   (the tools you actually get depend on the device; use only the ones offered.)
   - screen_gesture(path, duration_ms)  raw swipe/tap by [x,y] coords (escape hatch)
   - screen_wait()                    wait for a slow screen to settle, then refresh
@@ -66,6 +68,13 @@ How to work:
     or tap a search box, it is already focused); screen_enter runs the top result.
     Never tap the taskbar or poke raw coordinates to find Start. After the app opens
     the screen re-scopes to it — verify it's foreground before reporting done.
+  - On Windows, to CLOSE an app/window: bring the target window to the FOREGROUND,
+    then screen_close_window (it Alt+F4's the foreground window). An app is already
+    foreground right after you open it. If the target is NOT foreground, bring it up
+    first — screen_switch_window cycles to another window (Alt+Tab; call it again and
+    re-check the header until your target is foreground), or screen_windows lists
+    what's open. CLOSING is not OPENING: "close X" means focus X then
+    screen_close_window — NEVER screen_start_menu + typing the app name.
   - Finding an app: it may be inside a FOLDER/GROUP — open the folder (tap it) and
     look inside before concluding it's absent. To move through a list/feed scroll
     'down'/'up'; to change home-screen or app-drawer PAGES scroll 'left'/'right'.
