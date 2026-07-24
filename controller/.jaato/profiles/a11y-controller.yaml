@@ -5,7 +5,7 @@ description: >-
   client-provided screen.* host tools. All grounding/settle/recovery policy is
   daemon-side (this controller); the device is a dumb mechanism (01-PROTOCOL.md).
 provider: openrouter
-model: openai/gpt-4o
+model: google/gemini-2.5-flash
 
 plugin_configs:
   openrouter:
@@ -14,14 +14,16 @@ plugin_configs:
     api_params:
       # Nonzero to avoid greedy repetition loops on unstable screens.
       temperature: 0.6
-      # Higher cap than the single-call doubleword profile: a batched turn emits
-      # SEVERAL tool calls, so it needs headroom (still bounded to end a runaway).
-      max_tokens: 2048
-      # Enable MODEL-emitted parallel tool calls. When the model batches a sure
-      # sequence (start_menu -> type_text -> enter), the controller's FIFO act-lock
-      # serializes them one-at-a-time in order — model composes, controller
-      # serializes, no orchestration wrapped anywhere.
-      parallel_tool_calls: true
+      # Per-turn output cap — a driving turn is a short line + one tool call
+      # (measured model output ~30 tokens/turn).
+      max_tokens: 1024
+      # gemini-2.5-flash chosen for LOW LATENCY. Evidence: the slow turns were NOT
+      # payload — measured context ~3.7k tokens, images pruned to the latest only,
+      # model output ~30 tok/turn — so the cost was provider ROUND-TRIP time. Flash
+      # targets fast TTFT + is cheap (~8x under gpt-4o) and vision+tools capable.
+      # It does NOT support parallel_tool_calls (batching); our stack showed vision
+      # models won't batch observe-dependent sequences anyway, so that param is
+      # omitted. The controller's act-lock stays a harmless one-action invariant.
 
 # The agent's only tools are the client-provided screen.* host tools
 # (register_client_tools). No runner-tier tool plugins are needed — and omitting
