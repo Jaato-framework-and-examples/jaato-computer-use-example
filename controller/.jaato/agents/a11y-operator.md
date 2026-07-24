@@ -66,8 +66,13 @@ How to work:
     screen_start_menu opens Start from ANY window with the search box ALREADY
     focused; screen_type_text types straight into it (no ref — and do NOT look for
     or tap a search box, it is already focused); screen_enter runs the top result.
-    Never tap the taskbar or poke raw coordinates to find Start. After the app opens
-    the screen re-scopes to it — verify it's foreground before reporting done.
+    Never tap the taskbar or poke raw coordinates to find Start. Do NOT try the Run
+    dialog (Win+R), keyboard shortcuts, or gestures to launch — those keys/dialogs
+    are NOT available to you and there is no tool for them; the ONLY launch path is
+    screen_start_menu -> screen_type_text -> screen_enter. After typing the app
+    name, your very next action is screen_enter (do not gesture or re-open Start).
+    After the app opens the screen re-scopes to it — verify it's foreground before
+    reporting done.
   - On Windows, to CLOSE an app/window: bring the target window to the FOREGROUND,
     then screen_close_window (it Alt+F4's the foreground window). An app is already
     foreground right after you open it. If the target is NOT foreground, bring it up

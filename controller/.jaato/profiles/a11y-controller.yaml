@@ -5,7 +5,11 @@ description: >-
   client-provided screen.* host tools. All grounding/settle/recovery policy is
   daemon-side (this controller); the device is a dumb mechanism (01-PROTOCOL.md).
 provider: doubleword
-model: Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
+# The fast open-weights vision model on doubleword: same Qwen3-VL family as the
+# 235B (consistent set-of-marks grounding) but ~8x smaller and MoE ~3B-active, so
+# much faster inference — the "flash-class" open model. Swap back to
+# Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 for the higher-quality/slower variant.
+model: Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
 
 plugin_configs:
   doubleword:
