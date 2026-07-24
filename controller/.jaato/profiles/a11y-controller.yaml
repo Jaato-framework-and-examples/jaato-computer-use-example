@@ -4,35 +4,23 @@ description: >-
   set-of-marks screenshot + pruned node tree and drives the device through
   client-provided screen.* host tools. All grounding/settle/recovery policy is
   daemon-side (this controller); the device is a dumb mechanism (01-PROTOCOL.md).
-provider: doubleword
-model: Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
+provider: openrouter
+model: openai/gpt-4o
 
 plugin_configs:
-  doubleword:
+  openrouter:
     # Resolved daemon-side from the user's pass store — never a literal key here.
-    api_key: pass://jaato/doubleword/api-key
-    # doubleword's /v1/models doesn't report a context length and the provider
-    # refuses to guess (no-fallback rule), so pin the model's native 256K.
-    context_length: 262144
+    api_key: pass://jaato/openrouter/api-key
     api_params:
-      # Nonzero to avoid greedy repetition loops; a bit higher (0.6) since 0.4
-      # still degenerated on unstable screens. Ref selection stays stable enough.
+      # Nonzero to avoid greedy repetition loops on unstable screens.
       temperature: 0.6
-      # Hard cap on per-turn output. A driving turn is short reasoning + one
-      # screen.* tool call; without a cap a degenerating model runs away
-      # indefinitely (unbounded repetition), burning credits and hanging the
-      # turn. With the cap it's cut off, the turn ends, and control returns.
-      max_tokens: 1024
-      # Realtime tier — interactive device driving can't tolerate flex's async
-      # (minutes-level) latency; every turn is on the operator's critical path.
-      service_tier: priority
-      # Let the MODEL emit several tool calls in one turn (OpenAI-compatible
-      # parallel tool calls). This is the API-level enabler for model-batched
-      # primitives — the send-message parallel_tools flag only sets the daemon's
-      # execution mode, not this. When the model batches a sure sequence (e.g.
-      # start_menu -> type_text -> enter) the controller's FIFO act-lock runs them
-      # one at a time, in order, collapsing per-action think latency. No
-      # orchestration is wrapped: the model composes; the controller only serializes.
+      # Higher cap than the single-call doubleword profile: a batched turn emits
+      # SEVERAL tool calls, so it needs headroom (still bounded to end a runaway).
+      max_tokens: 2048
+      # Enable MODEL-emitted parallel tool calls. When the model batches a sure
+      # sequence (start_menu -> type_text -> enter), the controller's FIFO act-lock
+      # serializes them one-at-a-time in order — model composes, controller
+      # serializes, no orchestration wrapped anywhere.
       parallel_tool_calls: true
 
 # The agent's only tools are the client-provided screen.* host tools
