@@ -37,13 +37,15 @@ class _RecordingSession:
         self.in_op = False
         self.overlaps = 0
         self.order = []
+        self.settle_overrides = []       # settle_override seen per act (None = default)
         self._v = 1
 
-    async def act(self, selector, action):
+    async def act(self, selector, action, settle_override=None):
         if self.in_op:                   # a prior op's send/settle still in flight
             self.overlaps += 1
         self.in_op = True
         self.order.append(action.text or action.global_action or action.action)
+        self.settle_overrides.append(settle_override)
         await asyncio.sleep(0.005)        # simulate the send actuating
 
     async def await_settled(self, timeout):
@@ -79,3 +81,23 @@ def test_batched_acts_serialize_in_emission_order():
 
     assert sess.overlaps == 0                       # never two device acts at once
     assert sess.order == ["a", "b", "c", "d"]       # FIFO: emitted order preserved
+
+
+def test_global_act_gets_focus_settle_override():
+    """A GLOBAL act (whose effect is in another window) is sent with the desktop-
+    wide VIEW_FOCUSED settle override, so the device settles on the focus change
+    instead of timing out on a subtree that can't see it. Non-global acts get no
+    override (None = session default)."""
+    sess = _RecordingSession()
+    ctl = Controller(sess, audit=_Audit(), package_scope=["x"],
+                     screenshot_defaults={}, redaction={}, follow_foreground=False)
+    asyncio.run(ctl.global_action("START_MENU"))
+    asyncio.run(ctl.type_text("hello"))   # focus-directed, not global
+
+    ov_global = sess.settle_overrides[0]
+    assert ov_global is not None
+    assert "VIEW_FOCUSED" in ov_global.event_mask       # settles on the focus change
+    assert ov_global.package_scope == []                # desktop-wide (other window)
+    assert ov_global.hard_timeout_ms <= 2000            # short bound, not the 12s ceiling
+    assert ov_global.mode == "quiet"
+    assert sess.settle_overrides[1] is None             # type_text uses the default

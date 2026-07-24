@@ -23,7 +23,7 @@ from . import grounding
 from .audit import AuditLog
 from .device_session import DeviceSession, Observation
 from .protocol import Action, Selector, SettleConfig
-from .settle_policy import SettleTuner, session_default
+from .settle_policy import SettleTuner, global_settle, session_default
 from .wire import DeviceError, ErrorCode
 
 log = logging.getLogger("a11y.controller")
@@ -302,9 +302,15 @@ class Controller:
         """The core cycle (03 §3): act, await settle (with recovery), adapt the
         settle policy from the outcome, re-observe, audit, and return an ack."""
         self._acted_this_turn = True
+        # A GLOBAL's effect lands in a DIFFERENT window than the scoped one, so the
+        # session's subtree settle can't see it and always times out (~12s per
+        # global). Give globals a desktop-wide VIEW_FOCUSED settle override — the
+        # device just runs it (settle policy is the daemon's, §6).
+        is_global = action.action == "GLOBAL"
+        settle_ov = global_settle() if is_global else None
         from_version = self._session.current_snapshot.version if self._session.current_snapshot else 0
         try:
-            await self._session.act(selector, action)
+            await self._session.act(selector, action, settle_override=settle_ov)
         except DeviceError as exc:
             if exc.code == ErrorCode.STALE and stable_selector is not None:
                 # The screen churned (live clock/animation) between observe and
@@ -332,18 +338,26 @@ class Controller:
                     await self._reobserve()
                     return f"action not applied ({exc.code}: {rec.reason}); screen refreshed"
 
+        # Globals settle fast on the focus change (bounded by the override's short
+        # hard timeout, +1s margin for the round-trip); everything else uses the
+        # session ceiling.
+        settle_timeout = (settle_ov.hard_timeout_ms / 1000 + 1.0) if is_global else self._settle_ceiling_s
         try:
-            settled = await self._session.await_settled(timeout=self._settle_ceiling_s)
+            settled = await self._session.await_settled(timeout=settle_timeout)
             reason, sv = settled.reason, settled.version
         except DeviceError:
             reason, sv = "timeout", from_version
 
-        widened = self._tuner.observe(self._scope[0] if self._scope else "", reason)
-        if widened is not None:
-            self._settle = widened
-            log.info("settle widened after repeated timeouts -> %s", widened.to_wire())
-            await self._session.configure(
-                self._settle, self._scope, self._shot_defaults, self._redaction)
+        # Adaptive widening tracks the SCOPED package's settles; a global's settle
+        # is unscoped (its effect is another window), so it must not pollute that
+        # package's timeout history or widen the wrong config.
+        if not is_global:
+            widened = self._tuner.observe(self._scope[0] if self._scope else "", reason)
+            if widened is not None:
+                self._settle = widened
+                log.info("settle widened after repeated timeouts -> %s", widened.to_wire())
+                await self._session.configure(
+                    self._settle, self._scope, self._shot_defaults, self._redaction)
 
         obs = await self._reobserve()
         self._audit.record(selector, action, from_version, sv, reason)

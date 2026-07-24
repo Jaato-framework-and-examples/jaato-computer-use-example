@@ -43,6 +43,25 @@ def session_default(pkg: str) -> SettleConfig:
     )
 
 
+def global_settle() -> SettleConfig:
+    """Per-action settle override for a GLOBAL, whose effect lands in a DIFFERENT
+    window than the scoped one — Win opens Start; Alt+Tab switches windows;
+    Back/Home/Recents change the activity. A subtree-scoped content/state settle
+    structurally cannot see that effect, so it never reaches quiet and burns the
+    full hard timeout (~12s observed on every global). But a global ALWAYS causes
+    a FOCUS change, and the device's focus handler is desktop-wide, so settle on
+    ``VIEW_FOCUSED`` with an UNSCOPED, short-bounded quiet window: it fires ~200ms
+    after the new window takes focus instead of timing out. The device owns none
+    of this — it just runs the config the daemon sends for the act (§6)."""
+    return SettleConfig(
+        quiet_window_ms=200,
+        hard_timeout_ms=1500,
+        event_mask=["VIEW_FOCUSED", "WINDOW_STATE_CHANGED"],
+        package_scope=[],          # desktop-wide — the effect is in another window
+        mode="quiet",
+    )
+
+
 class SettleTuner:
     """Adaptive settle tuning from ``settled.reason`` telemetry (§6 feedback loop).
 
