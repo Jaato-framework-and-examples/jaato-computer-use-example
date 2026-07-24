@@ -366,3 +366,13 @@ def test_close_switch_window_tools_windows_gated():
     andr = {s["name"] for s in build_tools(_Ctl("android"))}
     assert {"screen_close_window", "screen_switch_window"} <= win
     assert not ({"screen_close_window", "screen_switch_window"} & andr)
+
+
+def test_configure_args_shell_flag_is_opt_in():
+    """observeShellSurfaces (daemon scope-policy: shell observable out of app scope)
+    is OFF by default (fail-closed) and only present when the daemon sets it."""
+    from a11y.protocol import configure_args, SettleConfig
+    base = configure_args(SettleConfig(), [], {}, {})
+    assert "observeShellSurfaces" not in base
+    on = configure_args(SettleConfig(), [], {}, {}, observe_shell=True)
+    assert on["observeShellSurfaces"] is True

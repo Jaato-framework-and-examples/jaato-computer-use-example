@@ -135,8 +135,13 @@ class DeviceSession:
     # -- high-level verbs ----------------------------------------------------
     async def configure(self, settle: SettleConfig, package_scope: List[str],
                         screenshot_defaults: dict, redaction: dict) -> None:
+        # Daemon-owned scope policy: on Windows, let the OS shell/launcher (Start /
+        # SearchHost) be observed even out of app scope, so the agent can SEE Start
+        # when it opens (else observe returns empty and launch flails). The device
+        # applies the flag and owns which surfaces are its shell.
         await self.request("configure", configure_args(
-            settle, package_scope, screenshot_defaults, redaction))
+            settle, package_scope, screenshot_defaults, redaction,
+            observe_shell=(self.platform == "windows")))
 
     async def observe(self, screenshot: bool = True,
                      screenshot_params: Optional[dict] = None) -> Observation:

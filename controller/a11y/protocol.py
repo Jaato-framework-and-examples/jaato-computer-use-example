@@ -352,13 +352,21 @@ class Action:
 
 
 def configure_args(settle: SettleConfig, package_scope: List[str],
-                   screenshot_defaults: dict, redaction: dict) -> dict:
+                   screenshot_defaults: dict, redaction: dict,
+                   observe_shell: bool = False) -> dict:
     """Build the ``configure`` args (§5.1). ``package_scope`` scopes both
     observation and action; passing an empty list keeps the device fail-closed
-    (§13.3)."""
-    return {
+    (§13.3). ``observe_shell`` is the daemon's scope-POLICY decision (§13) to let
+    OS shell/launcher surfaces (Windows Start/Search, the Android launcher) be
+    observed even when out of the app scope — the agent MUST see the launcher to
+    navigate. The daemon owns the policy (this flag); the device owns which
+    surfaces are its shell and just applies the flag. Off by default = fail-closed."""
+    args = {
         "settle": settle.to_wire(),
         "screenshotDefaults": screenshot_defaults,
         "redaction": redaction,
         "packageScope": list(package_scope),
     }
+    if observe_shell:
+        args["observeShellSurfaces"] = True
+    return args
