@@ -4,26 +4,28 @@ description: >-
   set-of-marks screenshot + pruned node tree and drives the device through
   client-provided screen.* host tools. All grounding/settle/recovery policy is
   daemon-side (this controller); the device is a dumb mechanism (01-PROTOCOL.md).
-provider: openrouter
-model: google/gemini-2.5-flash
+provider: doubleword
+model: Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
 
 plugin_configs:
-  openrouter:
+  doubleword:
     # Resolved daemon-side from the user's pass store — never a literal key here.
-    api_key: pass://jaato/openrouter/api-key
+    api_key: pass://jaato/doubleword/api-key
+    # doubleword's /v1/models doesn't report a context length and the provider
+    # refuses to guess (no-fallback rule), so pin the model's native 256K.
+    context_length: 262144
     api_params:
-      # Nonzero to avoid greedy repetition loops on unstable screens.
+      # Nonzero to avoid greedy repetition loops; a bit higher (0.6) since 0.4
+      # still degenerated on unstable screens. Ref selection stays stable enough.
       temperature: 0.6
-      # Per-turn output cap — a driving turn is a short line + one tool call
-      # (measured model output ~30 tokens/turn).
+      # Hard cap on per-turn output. A driving turn is short reasoning + one
+      # screen.* tool call; without a cap a degenerating model runs away
+      # indefinitely (unbounded repetition), burning credits and hanging the
+      # turn. With the cap it's cut off, the turn ends, and control returns.
       max_tokens: 1024
-      # gemini-2.5-flash chosen for LOW LATENCY. Evidence: the slow turns were NOT
-      # payload — measured context ~3.7k tokens, images pruned to the latest only,
-      # model output ~30 tok/turn — so the cost was provider ROUND-TRIP time. Flash
-      # targets fast TTFT + is cheap (~8x under gpt-4o) and vision+tools capable.
-      # It does NOT support parallel_tool_calls (batching); our stack showed vision
-      # models won't batch observe-dependent sequences anyway, so that param is
-      # omitted. The controller's act-lock stays a harmless one-action invariant.
+      # Realtime tier — interactive device driving can't tolerate flex's async
+      # (minutes-level) latency; every turn is on the operator's critical path.
+      service_tier: priority
 
 # The agent's only tools are the client-provided screen.* host tools
 # (register_client_tools). No runner-tier tool plugins are needed — and omitting
