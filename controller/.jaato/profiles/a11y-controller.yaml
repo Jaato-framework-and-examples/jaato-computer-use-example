@@ -26,6 +26,14 @@ plugin_configs:
       # Realtime tier — interactive device driving can't tolerate flex's async
       # (minutes-level) latency; every turn is on the operator's critical path.
       service_tier: priority
+      # Let the MODEL emit several tool calls in one turn (OpenAI-compatible
+      # parallel tool calls). This is the API-level enabler for model-batched
+      # primitives — the send-message parallel_tools flag only sets the daemon's
+      # execution mode, not this. When the model batches a sure sequence (e.g.
+      # start_menu -> type_text -> enter) the controller's FIFO act-lock runs them
+      # one at a time, in order, collapsing per-action think latency. No
+      # orchestration is wrapped: the model composes; the controller only serializes.
+      parallel_tool_calls: true
 
 # The agent's only tools are the client-provided screen.* host tools
 # (register_client_tools). No runner-tier tool plugins are needed — and omitting
