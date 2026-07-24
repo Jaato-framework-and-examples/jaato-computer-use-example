@@ -52,10 +52,15 @@ PROFILE = "a11y-controller"
 # How long to wait for the device to dial back in after a drop before giving up
 # and surfacing "device unavailable" (a network flap reconnects in seconds).
 RECONNECT_TIMEOUT_S = 90.0
-# The operator persona (tools + when-to-act judgment) lives in
-# .jaato/agents/a11y-operator.md and is loaded as the session's *system*
-# instructions — not injected into the first user turn.
-AGENT = "a11y-operator"
+# The operator persona (tools + when-to-act judgment) is loaded as the session's
+# *system* instructions (not injected into a user turn) and is selected by the
+# device's declared platform — the personas are platform-specific (Android's
+# folders/app-drawer/IME-submit vs Windows' multi-window/Start-launch), so each
+# device gets only its own, like the platform-gated tools and foreground-pick.
+AGENT_BY_PLATFORM = {
+    "android": "a11y-operator",
+    "windows": "a11y-operator-windows",
+}
 
 
 def _windows_preamble(data: dict) -> str:
@@ -237,7 +242,11 @@ async def run(initial_task: Optional[str], socket: str,
 
         await client.register_client_tools(build_tools(controller))
 
-        sid = await client.create_session(profile=PROFILE, agent=AGENT, timeout=60.0)
+        agent = AGENT_BY_PLATFORM.get(controller.platform)
+        if agent is None:
+            emit(f"no operator persona for platform {controller.platform!r} — cannot start")
+            return 1
+        sid = await client.create_session(profile=PROFILE, agent=agent, timeout=60.0)
         if not sid:
             emit("session.new failed — check provider auth (jaato-doctor) / the daemon log")
             return 1
