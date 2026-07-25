@@ -40,11 +40,3 @@ on any model (including the small open Qwen3-VL-30B), all daemon-driven:
   burning the hard timeout watching the old window's subtree.
 - **`Shot/ScreenCapturer.CaptureMonitor`** — full-monitor WGC fallback when a
   per-window capture fails or the foreground is `None`.
-
-## Authorship note
-
-The Windows device implementation is authored by the Windows-side peer. These
-files first entered version control under controller commit `02941d6` due to a
-shared-index sweep (they were staged when an unrelated controller commit ran);
-history was left intact rather than force-pushing shared history. This README
-clarifies the directory's purpose.
