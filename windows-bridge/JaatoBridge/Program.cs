@@ -54,6 +54,54 @@ if (args.Contains("--selftest-monitor"))
     return;
 }
 
+// Diagnostic: walk the foreground window and print nodes carrying scroll flags — verifies the
+// position-aware scrollable/scrollableDown/Up/Left/Right emission on a real window (e.g. Notepad).
+if (args.Contains("--selftest-observe"))
+{
+    // Target a top-level window whose title contains the substring after the flag (default "notepad"),
+    // so we don't depend on foreground/focus. Prints nodes carrying scroll flags.
+    int fi = Array.IndexOf(args, "--selftest-observe");
+    string want = (fi >= 0 && fi + 1 < args.Length && !args[fi + 1].StartsWith("--")) ? args[fi + 1] : "notepad";
+    var match = JaatoBridge.Observe.WindowLister.ListTopLevel()
+        .FirstOrDefault(w => w.Title.Contains(want, StringComparison.OrdinalIgnoreCase));
+    if (match is null) { Console.WriteLine($"no top-level window title contains '{want}'"); return; }
+    var suia = new UiaSession();
+    var el = suia.ElementFromHwnd(new IntPtr(match.Id));
+    if (el is null) { Console.WriteLine("no UIA element for that window"); return; }
+    var walk = new JaatoBridge.Observe.TreeWalker(suia).Walk(el);
+    Console.WriteLine($"window '{match.Title}' — {walk.Nodes.Count} nodes; scroll-flagged:");
+    foreach (var n in walk.Nodes.Where(n => n.Flags.Any(f => f.StartsWith("scroll"))))
+        Console.WriteLine($"  [{n.Ref}] {n.Cls} '{n.Text}' <{string.Join(",", n.Flags)}>");
+    return;
+}
+
+// Diagnostic: scroll a titled window's scrollable element to the bottom via UIA ScrollPattern (no focus
+// needed), printing vertical percent before/after + the resulting scroll flags — validates the at-bottom case.
+if (args.Contains("--selftest-scroll"))
+{
+    int fi = Array.IndexOf(args, "--selftest-scroll");
+    string want = (fi + 1 < args.Length && !args[fi + 1].StartsWith("--")) ? args[fi + 1] : "notepad";
+    var match = JaatoBridge.Observe.WindowLister.ListTopLevel().FirstOrDefault(w => w.Title.Contains(want, StringComparison.OrdinalIgnoreCase));
+    if (match is null) { Console.WriteLine($"no window '{want}'"); return; }
+    var suia = new UiaSession();
+    var win = suia.ElementFromHwnd(new IntPtr(match.Id));
+    var cond = suia.Automation.CreatePropertyCondition(Uia.IsScrollPatternAvailable, true);
+    var scrollEl = win?.FindFirst(UIAutomationClient.TreeScope.TreeScope_Subtree, cond);
+    if (scrollEl?.GetCurrentPattern(Uia.ScrollPattern) is UIAutomationClient.IUIAutomationScrollPattern sp)
+    {
+        Console.WriteLine($"before: vScrollable={sp.CurrentVerticallyScrollable} vPct={sp.CurrentVerticalScrollPercent:F1}");
+        try { sp.SetScrollPercent(-1, 100); } catch (Exception ex) { Console.WriteLine($"SetScrollPercent: {ex.Message}"); }
+        Thread.Sleep(400);
+        Console.WriteLine($"after : vScrollable={sp.CurrentVerticallyScrollable} vPct={sp.CurrentVerticalScrollPercent:F1}");
+    }
+    else { Console.WriteLine("no scrollable element found"); return; }
+    var walk = new JaatoBridge.Observe.TreeWalker(suia).Walk(win!);
+    Console.WriteLine("scroll-flagged after scroll-to-bottom:");
+    foreach (var n in walk.Nodes.Where(n => n.Flags.Any(f => f.StartsWith("scroll"))))
+        Console.WriteLine($"  [{n.Ref}] {n.Cls} <{string.Join(",", n.Flags)}>");
+    return;
+}
+
 // Single-instance guard (§3.1) — one bridge per interactive session.
 using var singleInstance = new System.Threading.Mutex(true, @"Local\JaatoBridge", out bool createdNew);
 if (!createdNew) { Log.Warn("another JaatoBridge instance is already running — exiting"); return; }

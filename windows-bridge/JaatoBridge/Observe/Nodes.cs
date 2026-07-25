@@ -45,7 +45,12 @@ public static class Uia
         IsEnabled = 30010, IsKeyboardFocusable = 30009, HasKeyboardFocus = 30008, IsPassword = 30019,
         HelpText = 30013, FullDescription = 30159, ValueValue = 30045,
         IsInvokePatternAvailable = 30031, IsValuePatternAvailable = 30043,
-        IsScrollPatternAvailable = 30034, IsTogglePatternAvailable = 30041;
+        IsScrollPatternAvailable = 30034, IsTogglePatternAvailable = 30041,
+        // ScrollPattern position props — make the `scrollable` flag position-aware (§8): emit the
+        // scrollableDown/Up/Left/Right axis companions only for directions that can actually still scroll,
+        // so the model knows when it's at an edge / fully visible instead of scroll-looping into a no-op.
+        HorizontalScrollPercent = 30053, VerticalScrollPercent = 30055,
+        HorizontallyScrollable = 30057, VerticallyScrollable = 30058;
 
     public const int InvokePattern = 10000, ValuePattern = 10002, ScrollPattern = 10004, TogglePattern = 10015;
 
@@ -55,6 +60,7 @@ public static class Uia
         IsOffscreen, IsEnabled, IsKeyboardFocusable, HasKeyboardFocus, IsPassword, HelpText,
         FullDescription, ValueValue, IsInvokePatternAvailable, IsValuePatternAvailable,
         IsScrollPatternAvailable, IsTogglePatternAvailable,
+        HorizontalScrollPercent, VerticalScrollPercent, HorizontallyScrollable, VerticallyScrollable,
     };
     public static readonly int[] AllPatterns = { InvokePattern, ValuePattern, ScrollPattern, TogglePattern };
 }

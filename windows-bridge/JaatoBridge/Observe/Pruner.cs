@@ -16,6 +16,8 @@ public static class Pruner
         public int[] RuntimeId;
         public bool Offscreen, Enabled, KbFocusable, Focused, Password;
         public bool Invoke, ValuePat, Scroll, Toggle;
+        public bool VScrollable, HScrollable;   // can scroll at all in that axis (false when content fits)
+        public double VScrollPct, HScrollPct;    // 0..100 position along the axis (-1 = NoScroll)
 
         public string? Text => !string.IsNullOrWhiteSpace(Name) ? Name : (!string.IsNullOrWhiteSpace(Value) ? Value : null);
         public string? Desc => !string.IsNullOrWhiteSpace(FullDesc) ? FullDesc : (!string.IsNullOrWhiteSpace(HelpText) ? HelpText : null);
@@ -44,6 +46,10 @@ public static class Pruner
             ValuePat = Bool(e, Uia.IsValuePatternAvailable),
             Scroll = Bool(e, Uia.IsScrollPatternAvailable),
             Toggle = Bool(e, Uia.IsTogglePatternAvailable),
+            VScrollable = Bool(e, Uia.VerticallyScrollable),
+            HScrollable = Bool(e, Uia.HorizontallyScrollable),
+            VScrollPct = Dbl(e, Uia.VerticalScrollPercent),
+            HScrollPct = Dbl(e, Uia.HorizontalScrollPercent),
         };
     }
 
@@ -54,7 +60,22 @@ public static class Pruner
         var flags = new List<string>(8);
         if (p.Invoke) flags.Add("clickable");
         if (p.ValuePat) flags.Add("editable");
-        if (p.Scroll) flags.Add("scrollable");
+        // Position-aware scroll flags (§8, matches Android's scrollableDown/Up/Left/Right companions which
+        // the daemon folds into `scrollable:down,up`). Emit an axis direction only if it can STILL scroll
+        // that way; `scrollable` iff any direction is available. Fully visible / at all edges => nothing,
+        // so the model stops instead of no-op-scroll-looping (Windows no-ops an at-edge scroll silently).
+        bool sDown = p.VScrollable && p.VScrollPct < 99.5;
+        bool sUp = p.VScrollable && p.VScrollPct > 0.5;
+        bool sRight = p.HScrollable && p.HScrollPct < 99.5;
+        bool sLeft = p.HScrollable && p.HScrollPct > 0.5;
+        if (sDown || sUp || sRight || sLeft)
+        {
+            flags.Add("scrollable");
+            if (sDown) flags.Add("scrollableDown");
+            if (sUp) flags.Add("scrollableUp");
+            if (sLeft) flags.Add("scrollableLeft");
+            if (sRight) flags.Add("scrollableRight");
+        }
         if (p.Toggle) flags.Add("checkable");
         if (p.Enabled) flags.Add("enabled");
         if (p.KbFocusable) flags.Add("focusable");
@@ -82,6 +103,10 @@ public static class Pruner
     static bool Bool(IUIAutomationElement e, int id)
     {
         try { return e.GetCachedPropertyValue(id) is bool b && b; } catch { return false; }
+    }
+    static double Dbl(IUIAutomationElement e, int id)
+    {
+        try { return e.GetCachedPropertyValue(id) is double d ? d : -1; } catch { return -1; }
     }
     static int[] IntArr(IUIAutomationElement e, int id)
     {
