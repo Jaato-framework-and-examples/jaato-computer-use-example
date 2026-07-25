@@ -22,6 +22,29 @@ the SDK.
 - `applicationId` `com.jaato.a11ybridge`, `minSdk` 30 (gates `takeScreenshot`), `targetSdk` 34.
 - Stack: Kotlin 2.0, coroutines, kotlinx.serialization, OkHttp.
 
+### Release build & signing
+
+The release build is signed from a **git-ignored** `keystore.properties` at the module root
+(`android-bridge/keystore.properties`); secrets never live in source. If that file is absent the
+release APK is left **unsigned** — a presence-gated outcome, not a silent fallback.
+
+```properties
+# android-bridge/keystore.properties  (chmod 600, git-ignored)
+storeFile=/absolute/path/android-bridge-release.jks
+storePassword=…
+keyAlias=android-bridge
+keyPassword=…
+```
+
+```bash
+./gradlew :app:assembleRelease      # → app/build/outputs/apk/release/app-release.apk
+```
+
+Verify the signer before distributing: `apksigner verify --print-certs app-release.apk`. The
+v0.1.0 signing certificate is **SHA-256 `F1264CCA…61C5AF16`** (`CN=Jaato a11y bridge, O=Jaato`);
+all future updates must be signed with the same key or Android will refuse the upgrade. The
+keystore + passphrases are backed up under `pass` (`jaato/android-bridge/*`).
+
 ## Install & run
 
 ```bash

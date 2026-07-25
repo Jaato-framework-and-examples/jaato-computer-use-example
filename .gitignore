@@ -18,6 +18,11 @@ venv/
 .pytest_cache/
 *.egg-info/
 
+# --- Signing secrets: NEVER commit ---
+*.jks
+*.keystore
+keystore.properties
+
 # --- Runtime / session state: NEVER publish ---
 # Framework workspace state, agent transcripts, and anything captured from a real device.
 .jaato/
