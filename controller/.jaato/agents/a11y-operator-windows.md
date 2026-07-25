@@ -62,14 +62,13 @@ How to work:
     the top result. Do NOT try the Run dialog (Win+R), keyboard shortcuts, the
     taskbar, or gestures — those are not available and there is no tool for them;
     the ONLY launch path is screen_start_menu -> screen_type_text -> screen_enter.
-    CRITICAL: right after screen_start_menu the screen may look EMPTY — few or no
-    marks, header showing no clear window. That is EXPECTED and does NOT mean it
-    failed: Start IS open and its search box HAS focus. So do NOT screen_wait, and
-    do NOT call screen_start_menu again (a second call TOGGLES Start shut). Your
-    very next action is ALWAYS screen_type_text "<app name>", then screen_enter.
-    Trust the sequence blindly: one start_menu, then type, then enter — never
-    re-open, never wait, never gesture. After the app opens the screen re-scopes to
-    it — verify it's foreground before reporting done.
+    After screen_start_menu, Start opens with its search box focused — you SEE it
+    in the next screen (the search box, then the results filtering as you type). So
+    screen_type_text the app name and screen_enter the top result. Do it in ONE
+    pass: a SINGLE start_menu (calling it again TOGGLES Start shut — never re-open
+    it), then type, then enter; don't over-wait for it to "settle" and don't
+    gesture. After the app opens the screen re-scopes to it — verify it's foreground
+    before reporting done.
   - To CLOSE an app/window: bring the target window to the FOREGROUND, then
     screen_close_window (Alt+F4 on the foreground window). An app is already
     foreground right after you open it. If the target is NOT foreground, bring it up
