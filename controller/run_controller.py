@@ -246,9 +246,31 @@ async def run(initial_task: Optional[str], socket: str,
         if agent is None:
             emit(f"no operator persona for platform {controller.platform!r} — cannot start")
             return 1
-        sid = await client.create_session(profile=PROFILE, agent=agent, timeout=60.0)
+
+        # Surface a session-creation failure's REASON in the console — like the
+        # SESSION_TERMINATED path does for quota/auth. The daemon emits an ErrorEvent
+        # (error + error_type, e.g. a SecretResolutionError) but create_session
+        # swallows it and returns None, so we capture it here. Without this the
+        # commonest failure — the provider key not resolving because its pass:// gpg
+        # secret re-locked — showed only "session.new failed, check the daemon log".
+        last_error: dict = {}
+        client.subscribe(EventType.ERROR, lambda ev: last_error.update(
+            error=getattr(ev, "error", "") or "", error_type=getattr(ev, "error_type", "") or ""))
+        try:
+            sid = await client.create_session(profile=PROFILE, agent=agent, timeout=60.0)
+        except Exception as exc:  # a raised bootstrap/tool error must not crash the CLI
+            sid = None
+            last_error.setdefault("error", str(exc))
         if not sid:
-            emit("session.new failed — check provider auth (jaato-doctor) / the daemon log")
+            detail = last_error.get("error") or ""
+            etype = last_error.get("error_type") or ""
+            emit("[error] the model session failed to start"
+                 + (f": {detail}" if detail else "")
+                 + (f" [{etype}]" if etype else "") + ".")
+            emit("  Most often the provider API key didn't resolve — if it's a pass://")
+            emit("  secret, its gpg key is likely locked; unlock it once and relaunch:")
+            emit("    pass show jaato/<provider>/api-key >/dev/null   (e.g. .../doubleword/api-key)")
+            emit("  Otherwise check provider auth (jaato-doctor). Full detail in the daemon log.")
             return 1
 
         turn_done = asyncio.Event()

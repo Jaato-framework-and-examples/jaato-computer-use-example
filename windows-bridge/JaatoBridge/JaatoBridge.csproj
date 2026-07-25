@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Debug keeps the console subsystem for live dev logs; Release is a console-less tray app (WinExe). -->
+    <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
+    <OutputType Condition="'$(Configuration)' != 'Release'">Exe</OutputType>
+    <!-- WinRT (Windows.Graphics.Capture, M4) + raw COM interop both need this TFM. -->
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Platform>x64</Platform>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>JaatoBridge</AssemblyName>
+    <RootNamespace>JaatoBridge</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- M5: tray app (NotifyIcon). Console stays visible in Debug for dev logs; a Release build would flip to WinExe. -->
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Raw IUIAutomation COM surface (tlbimp'd from UIAutomationCore.dll), NOT System.Windows.Automation. -->
+    <Reference Include="Interop.UIAutomationClient">
+      <HintPath>libs\Interop.UIAutomationClient.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WinForms pulls System.Drawing into implicit usings, clashing with ImageSharp's Image/Rectangle.
+         Drop the global; Tray/TrayApp.cs imports System.Drawing explicitly where it needs it. -->
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- M4 screenshot path: WGC capture (WinRT, from the TFM) + Vortice for the D3D11 readback,
+         ImageSharp for redaction/crop/downsample/encode (PNG for the controller, WebP per §7). -->
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
+    <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.5" />
+    <!-- DPAPI (ProtectedData) to encrypt the saved bearer token at rest (tray Settings). -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
