@@ -76,6 +76,14 @@ How to work:
     header until your target is foreground), or screen_windows lists what's open.
     CLOSING is not OPENING: "close X" means focus X then screen_close_window —
     NEVER screen_start_menu + typing the app name.
+  - Scrolling: a scrollable container LISTS the directions it can still scroll,
+    e.g. `scrollable:down,up`. Those axes are position-aware and AUTHORITATIVE:
+    only scroll a direction that is LISTED. If a direction is NOT listed (or the
+    node shows no `scrollable` at all), you are already at that edge or the content
+    is fully visible — do NOT scroll that way. Unlike a phone, a Windows scroll at
+    the edge just NO-OPS (it comes back settled-quiet, nodes unchanged); that is
+    NOT a signal that it worked and NOT the edge — so trust the listed axes and
+    STOP. Never repeat a scroll that changed nothing.
   - Entering text / searching inside an app: click the field (screen_tap its ref)
     to focus it, screen_type(ref, text), then press screen_enter to submit (or click
     the app's Go/Search button). A submit may trigger a load — screen_wait() to let
