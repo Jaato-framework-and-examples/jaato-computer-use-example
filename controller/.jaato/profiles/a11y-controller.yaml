@@ -22,6 +22,16 @@ plugin_configs:
       # Nonzero to avoid greedy repetition loops; a bit higher (0.6) since 0.4
       # still degenerated on unstable screens. Ref selection stays stable enough.
       temperature: 0.6
+      # Anti-repetition. The 30B degenerates by regenerating the SAME sentence
+      # within one completion (e.g. "I'll click the date…" ~10x) until max_tokens,
+      # never emitting the tool call — the dominant web-task failure once the
+      # device browser-click was fixed. frequency_penalty penalizes tokens by
+      # their in-completion count (the direct lever for verbatim repetition);
+      # presence_penalty adds a mild diversity nudge. Moderate values so legit
+      # repeats (refs, coords, "screen_tap") aren't over-penalized. Tune up if it
+      # still loops, or swap to the less-degenerate 235B.
+      frequency_penalty: 0.5
+      presence_penalty: 0.3
       # Hard cap on per-turn output. A driving turn is short reasoning + one
       # screen.* tool call, but an open-ended PLANNING turn can legitimately need
       # more prose before it acts — 1024 truncated mid-plan (the booking task).
