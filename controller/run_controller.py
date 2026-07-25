@@ -274,7 +274,18 @@ async def run(initial_task: Optional[str], socket: str,
             return 1
 
         turn_done = asyncio.Event()
-        client.subscribe(EventType.TURN_COMPLETED, lambda ev: turn_done.set())
+        # TURN_COMPLETED carries the model's finish_reason (01-PROTOCOL contract,
+        # framework PR #544): "stop"/"tool_use" are clean; "max_tokens"/"safety"/
+        # "error" mean the turn was cut short. The daemon also emits a source=
+        # "system" banner for the abnormal ones (rendered by on_output below), so we
+        # don't re-print the reason here — we only read it to keep the turn-boundary
+        # line honest (an "ended early" turn must not report a cheerful "done").
+        turn_finish = {"reason": "stop"}
+
+        def on_turn_completed(ev):
+            turn_finish["reason"] = getattr(ev, "finish_reason", "stop") or "stop"
+            turn_done.set()
+        client.subscribe(EventType.TURN_COMPLETED, on_turn_completed)
 
         # Agent text streams in chunks; prefix the first chunk of each turn with
         # "agent> " (symmetric to the "you> " operator prompt) so its replies are
@@ -282,15 +293,27 @@ async def run(initial_task: Optional[str], socket: str,
         turn_output = {"started": False}
 
         def on_output(ev):
-            # Show only the agent's own voice. The daemon streams the prompt back
-            # as source="user" (the observation tree the model consumes) and emits
-            # tool/system chatter too; those are telemetry, not conversation, so
-            # the pane would otherwise interleave "Current screen: … nodes=N" dumps
-            # with the model's words. Keep model text + thinking; drop the rest.
-            if getattr(ev, "source", "") not in ("model", "thinking"):
-                return
+            # Show the agent's own voice AND framework SYSTEM notices. The daemon
+            # streams the prompt back as source="user" (the observation tree the
+            # model consumes) and tool output as source="tool" — telemetry, not
+            # conversation — so the pane would otherwise interleave "Current screen:
+            # … nodes=N" dumps with the model's words. Keep model text + thinking;
+            # keep source="system" — the WHY a turn ended: abnormal-finish banners
+            # (max_tokens/safety/error) and [Generation cancelled]. These are the
+            # severe outcomes that must NOT be silently swallowed as a bare
+            # "[turn done]" (the whole point of the surfacing fix). System flush
+            # signals carry empty text and fall out at the `if not text` guard.
+            src = getattr(ev, "source", "")
             text = getattr(ev, "text", "") or getattr(ev, "content", "")
             if not text:
+                return
+            if src == "system":
+                if turn_output["started"]:
+                    emit("")  # close the open agent> line before the notice
+                    turn_output["started"] = False
+                emit(f"[!] {text}")
+                return
+            if src not in ("model", "thinking"):
                 return
             if not turn_output["started"]:
                 emit("agent> ", end="")
@@ -357,6 +380,7 @@ async def run(initial_task: Optional[str], socket: str,
             pending_steer = []
 
             turn_done.clear()
+            turn_finish["reason"] = "stop"
             turn_output["started"] = False
             controller.begin_turn()
             # parallel_tools=True lets the MODEL batch several primitives in one
@@ -401,7 +425,12 @@ async def run(initial_task: Optional[str], socket: str,
             # Computer-use: the model drove a full multi-action loop this turn
             # (each action fed back the fresh screenshot as a tool result), so a
             # completed turn hands back to the operator for the next instruction.
-            if not controller.acted_this_turn:
+            # An abnormal finish (max_tokens/safety/error) already printed its own
+            # source="system" banner via on_output; don't contradict it with a
+            # cheerful "[turn done]" — say the turn ended early.
+            if turn_finish["reason"] not in ("stop", "tool_use"):
+                emit("[turn ended early — your turn (type an instruction or /quit)]")
+            elif not controller.acted_this_turn:
                 emit("[turn done — your turn (type an instruction or /quit)]")
             else:
                 emit("[turn done — your turn, or say 'continue']")
