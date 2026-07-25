@@ -23,10 +23,13 @@ plugin_configs:
       # still degenerated on unstable screens. Ref selection stays stable enough.
       temperature: 0.6
       # Hard cap on per-turn output. A driving turn is short reasoning + one
-      # screen.* tool call; without a cap a degenerating model runs away
-      # indefinitely (unbounded repetition), burning credits and hanging the
-      # turn. With the cap it's cut off, the turn ends, and control returns.
-      max_tokens: 1024
+      # screen.* tool call, but an open-ended PLANNING turn can legitimately need
+      # more prose before it acts — 1024 truncated mid-plan (the booking task).
+      # 2048 gives that headroom while still bounding a degenerating model that
+      # would otherwise run away indefinitely (unbounded repetition, ~1 min of
+      # output at this cap). An abnormal max_tokens finish is now surfaced to the
+      # operator (controller run loop + framework), not a silent "[turn done]".
+      max_tokens: 2048
       # Realtime tier — interactive device driving can't tolerate flex's async
       # (minutes-level) latency; every turn is on the operator's critical path.
       service_tier: priority
