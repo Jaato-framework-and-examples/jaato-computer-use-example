@@ -5,9 +5,11 @@ using UIAutomationClient;
 namespace JaatoBridge.Act;
 
 /// <summary>
-/// §5.2 actuator — control patterns first; SendInput only for GESTURE/LONG_CLICK/GLOBAL. A pattern that
-/// is unsupported or refuses surfaces NOT_ACTIONABLE; the device never silently substitutes synthetic
-/// input for a refused semantic action (that is the controller's decision).
+/// §5.2 actuator — control patterns first; SendInput only for GESTURE/LONG_CLICK/GLOBAL, plus CLICK on
+/// browser/HTML content (where UIA Invoke returns success but the page's JS click never fires, so a real
+/// left click is the only mechanism that performs the click). A pattern that is unsupported or REFUSES
+/// (throws) still surfaces NOT_ACTIONABLE; the device never substitutes synthetic input for a refused
+/// semantic action on native controls (that is the controller's decision).
 /// </summary>
 public sealed class Actuator
 {
@@ -86,11 +88,24 @@ public sealed class Actuator
 
     void Click(IUIAutomationElement el)
     {
+        // Browser/HTML content (Chromium reports FrameworkId "Chrome" for web nodes — Chrome, Edge, etc.):
+        // UIA Invoke frequently RETURNS SUCCESS without firing the element's JS click handler, so a custom
+        // menu/button silently does nothing (observed on Booking.com's ProfileMenu — click "succeeded",
+        // dropdown never opened, node tree unchanged). This is NOT the "refused pattern" case §5.2 warns
+        // about (Invoke doesn't throw/refuse) — a real left click at the element center performs the SAME
+        // CLICK semantic via the only mechanism the page actually honours. Native controls stay pattern-first.
+        if (IsBrowserContent(el)) { var (x, y) = Center(el); SyntheticInput.Click(x, y); return; }
         try { if (el.GetCurrentPattern(Uia.InvokePattern) is IUIAutomationInvokePattern inv) { inv.Invoke(); return; } }
         catch (Exception ex) { Log.Warn($"Invoke threw, trying legacy: {ex.Message}"); }
         try { if (el.GetCurrentPattern(10018) is IUIAutomationLegacyIAccessiblePattern leg) { leg.DoDefaultAction(); return; } }
         catch (Exception ex) { Log.Warn($"legacy DoDefaultAction threw: {ex.Message}"); }
         throw new ProtoException(Err.NotActionable, "Invoke/DoDefaultAction unavailable or refused");
+    }
+
+    static bool IsBrowserContent(IUIAutomationElement el)
+    {
+        try { return (el.GetCurrentPropertyValue(Uia.FrameworkId) as string ?? "").Equals("Chrome", StringComparison.OrdinalIgnoreCase); }
+        catch { return false; }
     }
 
     void SetText(IUIAutomationElement el, string text)

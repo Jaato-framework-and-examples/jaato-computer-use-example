@@ -102,6 +102,54 @@ if (args.Contains("--selftest-scroll"))
     return;
 }
 
+// Diagnostic: dump the FrameworkId distribution of a titled window's subtree — confirms browser/HTML
+// content reports FrameworkId "Chrome" (the signal Actuator.Click uses to route to a real mouse click).
+if (args.Contains("--selftest-fw"))
+{
+    int fi = Array.IndexOf(args, "--selftest-fw");
+    string want = (fi + 1 < args.Length && !args[fi + 1].StartsWith("--")) ? args[fi + 1] : "chrome";
+    var match = JaatoBridge.Observe.WindowLister.ListTopLevel().FirstOrDefault(w => w.Title.Contains(want, StringComparison.OrdinalIgnoreCase));
+    if (match is null) { Console.WriteLine($"no window '{want}'"); return; }
+    var suia = new UiaSession();
+    var win = suia.ElementFromHwnd(new IntPtr(match.Id));
+    var cr = suia.Automation.CreateCacheRequest();
+    cr.AddProperty(Uia.FrameworkId);
+    var all = win!.FindAllBuildCache(UIAutomationClient.TreeScope.TreeScope_Subtree, suia.Automation.CreateTrueCondition(), cr);
+    var fws = new Dictionary<string, int>();
+    for (int i = 0; i < all.Length; i++)
+    {
+        var f = all.GetElement(i).GetCachedPropertyValue(Uia.FrameworkId) as string ?? "(null)";
+        fws[f] = fws.GetValueOrDefault(f) + 1;
+    }
+    Console.WriteLine($"window '{match.Title}' FrameworkId distribution:");
+    foreach (var kv in fws.OrderByDescending(k => k.Value)) Console.WriteLine($"  {kv.Value,5}  {kv.Key}");
+    return;
+}
+
+// Diagnostic: exercise the browser-click fix — find an element by AutomationId in a titled window,
+// report FrameworkId, real-click it (the fix path), and print node count before/after (did the menu open?).
+if (args.Contains("--selftest-click"))
+{
+    int fi = Array.IndexOf(args, "--selftest-click");
+    string winWant = fi + 1 < args.Length ? args[fi + 1] : "chrome";
+    string aid = fi + 2 < args.Length ? args[fi + 2] : "";
+    var match = JaatoBridge.Observe.WindowLister.ListTopLevel().FirstOrDefault(w => w.Title.Contains(winWant, StringComparison.OrdinalIgnoreCase));
+    if (match is null) { Console.WriteLine($"no window '{winWant}'"); return; }
+    WinApi.SetForegroundWindow(new IntPtr(match.Id)); Thread.Sleep(600);   // bring the target window up so the click lands
+    var suia = new UiaSession();
+    var win = suia.ElementFromHwnd(new IntPtr(match.Id));
+    var before = new JaatoBridge.Observe.TreeWalker(suia).Walk(win!).Nodes;
+    var target = before.FirstOrDefault(n => (n.Text ?? "").Contains(aid, StringComparison.OrdinalIgnoreCase));
+    if (target is null) { Console.WriteLine($"no node whose text contains '{aid}'"); return; }
+    int cx = (target.Bounds[0] + target.Bounds[2]) / 2, cy = (target.Bounds[1] + target.Bounds[3]) / 2;
+    Console.WriteLine($"clicking [{target.Ref}] '{target.Text}' center=({cx},{cy})");
+    JaatoBridge.Act.SyntheticInput.Click(cx, cy);  // the fix's action for browser content
+    Thread.Sleep(1400);
+    int after = new JaatoBridge.Observe.TreeWalker(suia).Walk(win!).Nodes.Count;
+    Console.WriteLine($"pruned node count: before={before.Count} after={after}  ({(after > before.Count ? "MENU OPENED (+" + (after - before.Count) + " nodes)" : "no change")})");
+    return;
+}
+
 // Single-instance guard (§3.1) — one bridge per interactive session.
 using var singleInstance = new System.Threading.Mutex(true, @"Local\JaatoBridge", out bool createdNew);
 if (!createdNew) { Log.Warn("another JaatoBridge instance is already running — exiting"); return; }
