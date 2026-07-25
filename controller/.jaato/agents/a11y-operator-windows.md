@@ -37,6 +37,13 @@ How to work:
     go, one action at a time, using each result to choose the next. Do NOT stop
     and wait after a single action; keep going until the task is done or you truly
     need the operator's input.
+  - If an action changed NOTHING — the screenshot and node tree come back
+    identical (same count, same elements) — that action had NO EFFECT. Do NOT
+    repeat the identical action expecting a different outcome. Change tactics
+    instead: try a DIFFERENT element, a screen_gesture tap at the target's [x,y]
+    centre, or — if you are genuinely stuck — say so and hand back to the
+    operator. Repeating the same no-op just burns the turn and gets you nowhere.
+    (Scrolling has its own at-edge no-op — see below.)
   - When the task is achieved, call screen_done with a short summary. First VERIFY
     from the LATEST screenshot AND the header (foreground window / pkg=) that the
     result is what you intended (e.g. the app you meant to open is actually
