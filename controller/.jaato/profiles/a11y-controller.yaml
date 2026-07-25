@@ -5,11 +5,14 @@ description: >-
   client-provided screen.* host tools. All grounding/settle/recovery policy is
   daemon-side (this controller); the device is a dumb mechanism (01-PROTOCOL.md).
 provider: doubleword
-# The fast open-weights vision model on doubleword: same Qwen3-VL family as the
-# 235B (consistent set-of-marks grounding) but ~8x smaller and MoE ~3B-active, so
-# much faster inference — the "flash-class" open model. Swap back to
-# Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 for the higher-quality/slower variant.
-model: Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+# Open-weights vision model on doubleword (consistent set-of-marks grounding).
+# On the 235B after the 30B-A3B (~8x smaller, "flash-class") degenerated on web
+# tasks: even WITH frequency/presence penalties it looped the same sentence
+# verbatim within a completion and never emitted the tool call (narrate-without-
+# acting) — device browser-click was solid, the model was the wall. 235B is far
+# less degeneration-prone (slower per turn). Drop back to
+# Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 for the faster variant if it stops looping.
+model: Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
 
 plugin_configs:
   doubleword:
