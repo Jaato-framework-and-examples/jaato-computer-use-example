@@ -282,37 +282,47 @@ class DeviceSession:
 
 
 class BridgeServer:
-    """The device-facing WS listener (03 §2). One device at a time (the tablet).
+    """The device-facing WS listener (03 §2). A *registry* of advertised devices.
 
     Authenticates the bearer token on the upgrade (01 §13.1) unless explicitly
-    run in unsafe no-auth mode, validates ``pv`` on ``hello``, and exposes the
-    resulting :class:`DeviceSession` via :meth:`wait_for_device`.
-    """
+    run in unsafe no-auth mode, validates ``pv`` on ``hello``, and registers the
+    resulting :class:`DeviceSession` as *available*. A device stays connected and
+    idle (its pump runs, keepalive answered) from the moment it advertises until
+    the controller promotes it to the active driven session — the operator lists
+    the advertised devices (:meth:`list_devices`) and picks one (:meth:`get_device`).
+    Several devices advertise concurrently; recovery waits for a *specific* one to
+    re-appear (:meth:`wait_for_device`)."""
 
     def __init__(self, host: str, port: int, path: str,
                  token: Optional[str], unsafe_no_auth: bool = False,
-                 on_window_changed: Optional[Callable[[dict], None]] = None) -> None:
+                 on_window_changed: Optional[Callable[[dict], None]] = None,
+                 on_registry_change: Optional[Callable[["DeviceSession", bool], None]] = None) -> None:
         self._host = host
         self._port = port
         self._path = path
         self._token = token
         self._unsafe_no_auth = unsafe_no_auth
         self._on_window_changed = on_window_changed
-        self.session: Optional[DeviceSession] = None
-        self._ready: asyncio.Event = asyncio.Event()
+        #: Called (session, present) when a device is added (True) or removed
+        #: (False) from the registry, so a host can surface it live — devices
+        #: advertise in the background, and nothing else tells the operator.
+        self._on_registry_change = on_registry_change
         self._server = None
-        # First-wins single-device slot. Claimed synchronously in _on_connect
-        # (before any await) so two near-simultaneous dial-ins can't both pass;
-        # released in that method's finally on disconnect / failed handshake.
-        self._connected = False
+        #: Advertised devices keyed by ``device_id``. A device is added on a
+        #: validated ``hello`` and removed when its socket closes; it is *not*
+        #: configured/observed until the operator connects to it.
+        self._devices: Dict[str, DeviceSession] = {}
+        #: Notified whenever a device is added, so :meth:`wait_for_device`
+        #: (recovery) blocks for a specific device to (re)appear without polling.
+        self._cond = asyncio.Condition()
 
     async def start(self) -> None:
         # Keepalive tuned for a mobile client that may be briefly network-
         # throttled while backgrounded: the device already pings every 15s
         # (OkHttp), so the default 20s ping / 20s pong-timeout tears down a
         # throttled-but-alive socket. Ping less often and allow a generous pong
-        # window; still finite so a genuinely dead peer is detected and the
-        # first-wins slot frees for the reconnect (03 §2).
+        # window; still finite so a genuinely dead peer is detected and dropped
+        # from the registry, freeing its id for the reconnect (03 §2).
         self._server = await websockets.serve(
             self._on_connect, self._host, self._port, max_size=16 * 1024 * 1024,
             ping_interval=30, ping_timeout=60)
@@ -323,11 +333,34 @@ class BridgeServer:
             self._server.close()
             await self._server.wait_closed()
 
-    async def wait_for_device(self, timeout: Optional[float] = None) -> DeviceSession:
-        """Block until a device has connected, authenticated, and sent ``hello``."""
-        await asyncio.wait_for(self._ready.wait(), timeout=timeout)
-        assert self.session is not None
-        return self.session
+    def list_devices(self) -> List[DeviceSession]:
+        """Every advertised (connected, alive) device, in dial-in order."""
+        return [d for d in self._devices.values() if d.alive]
+
+    def get_device(self, device_id: str) -> Optional[DeviceSession]:
+        """The advertised device with this id, or ``None`` if not connected."""
+        d = self._devices.get(device_id)
+        return d if d is not None and d.alive else None
+
+    async def wait_for_device(self, device_id: Optional[str] = None,
+                              timeout: Optional[float] = None) -> DeviceSession:
+        """Block until a matching device is advertised. ``device_id=None`` waits
+        for ANY device (the first available); a given id waits for THAT device to
+        (re)appear — used by recovery when the active device drops and dials back
+        in under the same id."""
+        async def _wait() -> DeviceSession:
+            async with self._cond:
+                while True:
+                    match = self._match(device_id)
+                    if match is not None:
+                        return match
+                    await self._cond.wait()
+        return await asyncio.wait_for(_wait(), timeout=timeout)
+
+    def _match(self, device_id: Optional[str]) -> Optional[DeviceSession]:
+        if device_id is not None:
+            return self.get_device(device_id)
+        return next((d for d in self._devices.values() if d.alive), None)
 
     def _authenticate(self, ws) -> bool:
         if self._unsafe_no_auth:
@@ -353,41 +386,51 @@ class BridgeServer:
             log.warning("rejecting unauthenticated device connection")
             await ws.close(code=1008, reason="unauthorized")
             return
-        # First-wins: one device at a time. Claim the slot synchronously (no await
-        # between the check and the set) so a second, concurrent dial-in is turned
-        # away rather than silently taking over the session we already serve.
-        if self._connected:
-            log.warning("rejecting a second device — one is already connected (first-wins)")
-            await ws.close(code=1013, reason="bridge busy: a device is already connected")
-            return
-        self._connected = True
         try:
-            try:
-                hello = await self._read_hello(ws)
-            except (websockets.ConnectionClosed, asyncio.TimeoutError, ValueError) as exc:
-                log.warning("no valid hello: %s", exc)
-                await ws.close(code=1002, reason="expected hello")
-                return
-            if int(hello.get("pv", 0)) != PV:
-                log.error("pv mismatch: device pv=%s want %s", hello.get("pv"), PV)
-                await ws.send(json.dumps({"kind": "event", "event": "error",
-                                          "data": {"code": ErrorCode.PROTOCOL_VERSION,
-                                                   "message": f"pv {hello.get('pv')} unsupported"}}))
-                await ws.close(code=1002, reason="pv mismatch")
-                return
-            session = DeviceSession(ws, hello, on_window_changed=self._on_window_changed)
-            self.session = session
-            self._ready.set()
-            log.info("device connected: %s platform=%s sdk=%s caps=%s",
-                     session.device_id, session.platform or "<undeclared>",
-                     hello.get("androidSdk"), session.capabilities)
+            hello = await self._read_hello(ws)
+        except (websockets.ConnectionClosed, asyncio.TimeoutError, ValueError) as exc:
+            log.warning("no valid hello: %s", exc)
+            await ws.close(code=1002, reason="expected hello")
+            return
+        if int(hello.get("pv", 0)) != PV:
+            log.error("pv mismatch: device pv=%s want %s", hello.get("pv"), PV)
+            await ws.send(json.dumps({"kind": "event", "event": "error",
+                                      "data": {"code": ErrorCode.PROTOCOL_VERSION,
+                                               "message": f"pv {hello.get('pv')} unsupported"}}))
+            await ws.close(code=1002, reason="pv mismatch")
+            return
+        session = DeviceSession(ws, hello, on_window_changed=self._on_window_changed)
+        did = session.device_id
+        # Register as advertised — available for the operator to pick, but idle
+        # (not configured/observed) until connected. A reconnect under an existing
+        # id replaces the old (dead) session in the registry.
+        async with self._cond:
+            self._devices[did] = session
+            self._cond.notify_all()
+        log.info("device advertised: %s platform=%s sdk=%s caps=%s",
+                 did, session.platform or "<undeclared>",
+                 hello.get("androidSdk"), session.capabilities)
+        self._notify_change(session, True)
+        try:
             await session.pump()
         finally:
-            # Socket closed / handshake failed — release the slot so a fresh
-            # dial-in (or a legitimate reconnect of the same device) can take over.
-            self._connected = False
-            self.session = None
-            self._ready.clear()
+            # Socket closed — drop it from the registry, but only if this exact
+            # session still holds the id: a newer reconnect that already replaced
+            # it must not be evicted by the old socket's teardown.
+            async with self._cond:
+                removed = self._devices.get(did) is session
+                if removed:
+                    del self._devices[did]
+            if removed:
+                self._notify_change(session, False)
+
+    def _notify_change(self, session: DeviceSession, present: bool) -> None:
+        if self._on_registry_change is None:
+            return
+        try:
+            self._on_registry_change(session, present)
+        except Exception:  # a host callback error must not break the pump
+            log.exception("on_registry_change callback failed")
 
     async def _read_hello(self, ws) -> dict:
         """Read frames until the ``hello`` event arrives (01 §6.1)."""

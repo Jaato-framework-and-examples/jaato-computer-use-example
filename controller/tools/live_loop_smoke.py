@@ -118,7 +118,7 @@ async def main() -> int:
     port = _free_port()
 
     # Bind run()'s listener to the free loopback port without touching the
-    # committed .jaato/a11y-bridge.yaml (which stays on the production 8765).
+    # committed a11y-bridge.yaml (which stays on the production 8765).
     # run() has no port parameter — it reads config.load() — so wrap that seam.
     _orig_load = run_controller.config.load
 

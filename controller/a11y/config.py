@@ -1,9 +1,11 @@
-"""Load the device-facing bridge config (``.jaato/a11y-bridge.yaml``).
+"""Load the device-facing bridge config (``a11y-bridge.yaml`` at the workspace root).
 
-This is client-side config (listener host/port/token, package scope, screenshot
-and redaction policy, loop bounds) — distinct from the jaato *profile* that
-selects the LLM provider/model. Validation is fail-loud: a missing auth choice
-or an empty package scope is an error, never a silent permissive default.
+This is the controller's OWN config (listener host/port/token, package scope,
+screenshot and redaction policy, loop bounds) — read only here, never by the jaato
+daemon, so it lives at the workspace root, not in the framework's ``.jaato/`` (which
+holds only daemon-consumed assets: profiles, agents). Distinct from the jaato
+*profile* that selects the LLM provider/model. Validation is fail-loud: a missing
+auth choice or an empty package scope is an error, never a silent permissive default.
 """
 from __future__ import annotations
 
@@ -56,14 +58,14 @@ def _resolve_token(listen: dict) -> tuple[Optional[str], bool]:
 
 
 def load(workspace: str, scope_override: Optional[List[str]] = None) -> BridgeConfig:
-    """Load + validate the config from ``<workspace>/.jaato/a11y-bridge.yaml``.
+    """Load + validate the config from ``<workspace>/a11y-bridge.yaml``.
 
     ``scope_override`` (from the CLI) replaces the file's ``device.package_scope``.
     A non-empty scope PINS authority to those packages; an empty scope selects
     follow-the-foreground, where the controller learns the on-screen package
     after connect and auto-re-scopes (01 §13.3).
     """
-    cfg_path = Path(workspace) / ".jaato" / "a11y-bridge.yaml"
+    cfg_path = Path(workspace) / "a11y-bridge.yaml"
     if not cfg_path.exists():
         raise FileNotFoundError(f"missing bridge config: {cfg_path}")
     raw = yaml.safe_load(cfg_path.read_text()) or {}

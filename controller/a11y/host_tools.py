@@ -14,15 +14,124 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 from typing import Any, Dict, List
 
 from . import annotate
 from .controller import Controller
+from .device_session import BridgeServer, DeviceSession
 
 log = logging.getLogger("a11y.tools")
 
+#: Platform operating guides bundled with this package — the platform-specific
+#: half of the operator's grounding, returned by ``connect_device`` as data when a
+#: device connects (rather than baked into the agent persona). These are an asset
+#: of the selection tool, so they live with it, not in the framework's ``.jaato/``.
+_GUIDES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides")
 
-def _screen_result(controller: Controller, ack: str) -> dict:
+
+def load_guide(platform: str) -> str:
+    """The operating guide for ``platform`` (``guides/<platform>.md`` in this
+    package). A missing guide is a real error (a device declared a platform we can't
+    operate) — surfaced loudly, no silent fallback."""
+    path = os.path.join(_GUIDES_DIR, f"{platform}.md")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"no operating guide for platform {platform!r}: expected {path}")
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def _logged(name: str, handler):
+    """Wrap a handler so every model tool-call and its result are logged — the
+    ground truth for 'the agent said it would X but nothing happened'."""
+    async def _w(args: dict) -> dict:
+        log.info("tool-call %s %s", name, args)
+        res = await handler(args)
+        log.info("tool-result %s -> %r", name, res.get("result"))
+        return res
+    return _w
+
+
+def devices_text(devices: List[DeviceSession]) -> str:
+    """Render the advertised-device registry as a compact list the model shows the
+    operator to choose from: one line per device — its id (what ``connect_device``
+    takes) and declared platform. Backs ``list_devices`` in device selection."""
+    if not devices:
+        return ("No devices are advertised right now. A device advertises by "
+                "dialing in to the bridge (its Daemon URL points here); ask the "
+                "operator to open/connect their device, then list again.")
+    lines = ["Advertised devices (pick one by its id):"]
+    for d in devices:
+        lines.append(f"  id={d.device_id!r}  platform={d.platform or '<undeclared>'}")
+    return "\n".join(lines)
+
+
+def build_selection_tools(bridge: BridgeServer, connect_cb) -> List[Dict[str, Any]]:
+    """Device-selection tools (``list_devices`` / ``connect_device``) for the single
+    operator agent (03 §2, device selection).
+
+    ``connect_device`` validates the id, delegates the binding to
+    ``connect_cb(device_id)`` — an async host callback that binds the device to a
+    :class:`Controller` and registers its platform-gated ``screen.*`` tools,
+    returning that live controller — then loads the platform operating guide (a
+    bundled asset of THIS tool) and returns guide + first set-of-marks screen as the
+    tool result. So the SAME agent reads how the chosen device works and sees its
+    screen, then drives — no separate operator session, no task hand-off (the agent
+    already holds the task). ``connect_cb`` is injected by the host (the CLI or the
+    telegram bot) so this module stays free of Controller/client wiring; the guide,
+    being the tool's own asset, is owned here."""
+
+    async def list_devices(args: dict) -> dict:
+        return {"result": devices_text(bridge.list_devices())}
+
+    async def connect_device(args: dict) -> dict:
+        device_id = str(args["device_id"])
+        if bridge.get_device(device_id) is None:
+            return {"result": f"No advertised device with id {device_id!r}. "
+                              "Call list_devices to see what is currently connected."}
+        controller = await connect_cb(device_id)
+        try:
+            guide = load_guide(controller.platform)
+        except FileNotFoundError as exc:
+            return {"result": f"Connected to {device_id}, but there is no operating "
+                              f"guide for its platform ({controller.platform!r}): {exc}. "
+                              "I can't drive this device — tell the operator."}
+        # Guide + first screen as the tool result: the agent reads how this device
+        # works and sees it, then drives.
+        return screen_result(controller, guide)
+
+    specs = [
+        {
+            "name": "list_devices",
+            "description": "List the devices currently advertised to the bridge (each "
+                           "line: its id and platform). Call this first when the operator "
+                           "wants to act on a device, then show them the options so they "
+                           "can choose which one to use.",
+            "parameters": {"type": "object", "properties": {}},
+            "handler": list_devices,
+        },
+        {
+            "name": "connect_device",
+            "description": "Connect to the device the operator chose, by its id (from "
+                           "list_devices). Call ONLY once the operator has picked. The "
+                           "result tells you how that device works and shows its current "
+                           "screen — read and follow it, then carry out the task. Its "
+                           "screen_* tools become available right after you connect.",
+            "parameters": {"type": "object",
+                           "properties": {
+                               "device_id": {"type": "string",
+                                             "description": "the chosen device's id"}},
+                           "required": ["device_id"]},
+            "handler": connect_device,
+        },
+    ]
+    for spec in specs:
+        spec["handler"] = _logged(spec["name"], spec["handler"])
+    return specs
+
+
+def screen_result(controller: Controller, ack: str) -> dict:
     """Bundle the action's ack with the FRESH set-of-marks screenshot + tree as a
     multimodal tool result. This lets a computer-use model see the effect of each
     action and act again within the same turn — instead of acting blind on a
@@ -68,39 +177,47 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
 
     async def screen_tap(args: dict) -> dict:
         ack = await controller.act_ref(int(args["ref"]), _click())
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_type(args: dict) -> dict:
         from .protocol import Action
         ack = await controller.act_ref(int(args["ref"]), Action.set_text(str(args["text"])))
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_scroll(args: dict) -> dict:
         from .protocol import Action
         ack = await controller.act_ref(int(args["ref"]), Action.scroll_dir(str(args["direction"])))
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_submit(args: dict) -> dict:
         from .protocol import Action
         ack = await controller.act_ref(int(args["ref"]), Action.ime_enter())
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_back(args: dict) -> dict:
-        return _screen_result(controller, await controller.global_action("BACK"))
+        return screen_result(controller, await controller.global_action("BACK"))
 
     async def screen_home(args: dict) -> dict:
-        return _screen_result(controller, await controller.global_action("HOME"))
+        return screen_result(controller, await controller.global_action("HOME"))
 
     async def screen_recents(args: dict) -> dict:
-        return _screen_result(controller, await controller.global_action("RECENTS"))
+        return screen_result(controller, await controller.global_action("RECENTS"))
 
     async def screen_gesture(args: dict) -> dict:
         path = [[int(p[0]), int(p[1])] for p in args["path"]]
         ack = await controller.gesture(path, int(args.get("duration_ms", 300)))
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
+
+    async def screen_observe(args: dict) -> dict:
+        # Pure look: re-observe (and follow the foreground) and return the fresh
+        # set-of-marks screen WITHOUT acting. The agent's way to (re)ground when
+        # resuming or unsure — the observation flows through tool results now, not
+        # an injected per-turn user message.
+        await controller.first_observation()
+        return screen_result(controller, "current screen")
 
     async def screen_wait(args: dict) -> dict:
-        return _screen_result(controller, await controller.wait())
+        return screen_result(controller, await controller.wait())
 
     async def screen_windows(args: dict) -> dict:
         # Metadata query (non-scope-gated); doesn't change the screen, so it
@@ -112,41 +229,31 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
         # window — the reliable "reach the shell" step. Returns the fresh screen
         # (Start is now foreground) so the model can type + pick a result.
         ack = await controller.global_action("START_MENU")
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_type_text(args: dict) -> dict:
         # Focus-directed: types into whatever holds keyboard focus, no ref needed
         # (e.g. the Start search box after screen_start_menu).
         ack = await controller.type_text(str(args["text"]))
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_enter(args: dict) -> dict:
         ack = await controller.press_key("ENTER")
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_close_window(args: dict) -> dict:
         # CLOSE_WINDOW (Alt+F4) closes the FOREGROUND window.
         ack = await controller.global_action("CLOSE_WINDOW")
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_switch_window(args: dict) -> dict:
         # SWITCH_WINDOW (Alt+Tab) switches to the previous window; call again to
         # keep cycling until the target is foreground.
         ack = await controller.global_action("SWITCH_WINDOW")
-        return _screen_result(controller, ack)
+        return screen_result(controller, ack)
 
     async def screen_done(args: dict) -> dict:
         return {"result": controller.mark_done(str(args.get("summary", "")))}
-
-    def _logged(name: str, handler):
-        """Wrap a handler so every model tool-call and its result are logged —
-        the ground truth for 'the agent said it would X but nothing happened'."""
-        async def _w(args: dict) -> dict:
-            log.info("tool-call %s %s", name, args)
-            res = await handler(args)
-            log.info("tool-result %s -> %r", name, res.get("result"))
-            return res
-        return _w
 
     specs = [
         {
@@ -204,6 +311,11 @@ def build_tools(controller: Controller) -> List[Dict[str, Any]]:
                            "required": ["path"]},
             "handler": screen_gesture,
         },
+        {"name": "screen_observe",
+         "description": "Look at the device's CURRENT screen without acting — returns the "
+                        "fresh screenshot + tree. Use it to (re)ground when you resume or "
+                        "are unsure what's on screen now, before choosing an action.",
+         "parameters": {"type": "object", "properties": {}}, "handler": screen_observe},
         {"name": "screen_wait",
          "description": "Wait for the screen to stop changing (e.g. after a slow load), then refresh. "
                         "Does not act.",
