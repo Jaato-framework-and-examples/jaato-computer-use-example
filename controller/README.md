@@ -57,27 +57,31 @@ set-of-marks (`annotate.py`), settle authoring + adaptive tuning
 | `a11y/audit.py` | append-only action log (03 §9) |
 | `a11y/controller.py` | the act→settle→reobserve cycle + loop state |
 | `a11y/host_tools.py` | the `screen.*` tool surface (03 §8) |
-| `a11y/config.py` | loads `.jaato/a11y-bridge.yaml` |
+| `a11y/config.py` | loads `a11y-bridge.yaml` (workspace root) |
 | `run_controller.py` | entrypoint: listener + jaato client + loop |
 
 ## Config
 
-Two files, deliberately separate:
+Two files, deliberately separate — one the jaato daemon reads, one only the
+controller reads:
 
-- **`.jaato/profiles/a11y-controller.yaml`** — the LLM (jaato profile):
-  provider `doubleword`, model `Qwen/Qwen3-VL-235B-A22B-Instruct-FP8`, key via
-  `plugin_configs.doubleword.api_key: pass://jaato/doubleword/api-key`
-  (resolved daemon-side; never a literal). No `.env`.
-- **`.jaato/a11y-bridge.yaml`** — the device-facing listener: host/port/path,
-  bearer auth, **`device.package_scope`** (REQUIRED non-empty — an empty scope
-  keeps the device fail-closed), screenshot + redaction policy, loop bounds.
+- **`.jaato/profiles/a11y-controller.yaml`** — the LLM (jaato *profile*, read by
+  the daemon): provider `doubleword`, model `Qwen/Qwen3-VL-235B-A22B-Instruct-FP8`,
+  key via `plugin_configs.doubleword.api_key: pass://jaato/doubleword/api-key`
+  (resolved daemon-side; never a literal). No `.env`. Lives in `.jaato/` because
+  the framework owns it.
+- **`a11y-bridge.yaml`** (workspace root) — the controller's OWN config, read only
+  by `a11y/config.py`: the device-facing listener host/port/path, bearer auth,
+  **`device.package_scope`** (REQUIRED non-empty — an empty scope keeps the device
+  fail-closed), screenshot + redaction policy, loop bounds. NOT in `.jaato/` — that
+  directory is reserved for daemon-consumed assets (profiles, agents).
 
 ## Run
 
 ```bash
 PY="$HOME/.local/share/jaato/venv/bin/python"   # your jaato daemon venv
 
-# 1. set device.package_scope in .jaato/a11y-bridge.yaml (or pass --scope)
+# 1. set device.package_scope in a11y-bridge.yaml (or pass --scope)
 # 2. start the controller (autostarts its own daemon on a fresh socket):
 $PY run_controller.py "Open Settings and turn Wi-Fi off" \
     --scope com.android.settings -v
