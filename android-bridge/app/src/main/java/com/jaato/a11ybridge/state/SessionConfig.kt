@@ -49,6 +49,19 @@ class SessionStore {
         }
     }
 
+    /**
+     * Replace only the effective packageScope, leaving all other policy intact. Used by the
+     * consent gate to widen (on approval) or collapse (on revoke) the live scope out-of-band
+     * from a `configure` (device design §13).
+     */
+    fun setScope(scope: List<String>) {
+        while (true) {
+            val cur = ref.get()
+            val next = cur.copy(packageScope = scope)
+            if (ref.compareAndSet(cur, next)) return
+        }
+    }
+
     /** Reset to fail-closed defaults (used on (re)connect before the daemon configures). */
     fun reset() { ref.set(SessionConfig.SAFE_DEFAULT) }
 }

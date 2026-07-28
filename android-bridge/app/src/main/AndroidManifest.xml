@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Ongoing status notification (transparency + re-enable prompt). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Center-screen consent modal drawn over the foreground app (device design §13). Special
+         access: user-granted via Settings, checked with Settings.canDrawOverlays(). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Foreground service: keeps the process at foreground importance so the WebSocket is not
          throttled/suspended while the app is backgrounded. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -36,6 +39,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Maintains the operator-authorised accessibility bridge WebSocket to the controlling daemon while the app is backgrounded." />
         </service>
+
+        <!-- Routes the consent notification's Allow/Deny taps to the service (§13). Non-exported:
+             only this app's own notification actions can trigger it. -->
+        <receiver
+            android:name=".ConsentReceiver"
+            android:exported="false" />
 
         <service
             android:name=".BridgeAccessibilityService"

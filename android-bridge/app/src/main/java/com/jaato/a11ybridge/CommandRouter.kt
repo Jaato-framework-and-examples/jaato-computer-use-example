@@ -7,6 +7,7 @@ import com.jaato.a11ybridge.observe.TreeWalker
 import com.jaato.a11ybridge.observe.WindowLister
 import com.jaato.a11ybridge.settle.SettleDetector
 import com.jaato.a11ybridge.shot.ScreenshotCapturer
+import com.jaato.a11ybridge.state.ConsentGate
 import com.jaato.a11ybridge.state.SessionStore
 import com.jaato.a11ybridge.state.SessionConfig
 import com.jaato.a11ybridge.state.SnapshotClock
@@ -59,8 +60,24 @@ class CommandRouter(
     private val activityProvider: () -> String?,
     private val screenProvider: () -> Screen,
     private val onConfigApplied: (SessionConfig) -> Unit,
+    /** Ask the operator to approve a scope widening (raises the consent prompt). */
+    private val requestConsent: (pending: Set<String>, generation: Int) -> Unit,
+    /** Take down any live consent prompt (decision made / session reset). */
+    private val dismissConsent: () -> Unit,
 ) {
     private val inbox = Channel<String>(Channel.UNLIMITED)
+
+    /** Human-in-the-loop authorization for the single configured daemon (device design §13). */
+    private val consent = ConsentGate()
+
+    /**
+     * True while a consent prompt is on screen. Coordinate `GESTURE` actuation is suppressed
+     * during this window so the daemon can't blind-tap its own "Allow" button (the modal owns the
+     * screen; node-clicks already can't reach it, as our overlay is out of every packageScope).
+     * Written from the UI thread (approve/deny), read from the router coroutine (act) → volatile.
+     */
+    @Volatile
+    private var consentPromptActive = false
 
     init {
         scope.launch { for (frame in inbox) handleFrame(frame) }
@@ -74,8 +91,45 @@ class CommandRouter(
     /** Reset to fail-closed session state (on (re)connect, before the daemon configures). */
     fun resetSession() {
         session.reset()
+        // The standing consent grant survives a transport (re)connect on purpose: a network blip
+        // re-`configure`d with the same scope must NOT re-prompt (device design §13). Only the
+        // in-flight prompt (moot once the socket flapped) is abandoned; on reconnect the daemon
+        // re-pushes configure and an unchanged scope applies silently.
+        consent.abandonPending()
+        consentPromptActive = false
+        dismissConsent()
         settle.disarm()
         settle.applySession(session.get().settle)
+    }
+
+    /**
+     * Operator approved a pending widening: fold it into the grant and push the newly-consented
+     * scope live. No wire signal — the daemon simply finds observe/act now work on those apps.
+     */
+    fun approveConsent(generation: Int) {
+        val effective = consent.approve(generation) ?: return
+        session.setScope(effective.toList())
+        consentPromptActive = false
+        dismissConsent()
+    }
+
+    /** Operator denied a pending widening: the packages stay out; a later configure re-prompts. */
+    fun denyConsent(generation: Int) {
+        if (consent.deny(generation)) {
+            consentPromptActive = false
+            dismissConsent()
+        }
+    }
+
+    /**
+     * Void all consent and collapse the live scope immediately (daemon-settings change / explicit
+     * revoke). The next widening — including re-adding a just-revoked app — prompts afresh.
+     */
+    fun revokeConsent() {
+        consent.revoke()
+        session.setScope(emptyList())
+        consentPromptActive = false
+        dismissConsent()
     }
 
     // -----------------------------------------------------------------------
@@ -130,7 +184,28 @@ class CommandRouter(
 
     private fun configure(req: Req): Res {
         val args = Wire.json.decodeFromJsonElement(ConfigureArgs.serializer(), req.args)
-        val cfg = session.apply(args)
+        // Authorization gate (§13): the effective packageScope is clamped to what the operator has
+        // consented to for the single configured daemon. A widening beyond the consented set is
+        // held pending and prompted; until approved it simply isn't in scope — fail-closed, no new
+        // wire code. Only this top-level packageScope (the content/act/clock boundary) is gated;
+        // SettleConfig.packageScope is timing-only (exposes neither tree content nor actions), so
+        // it is left exactly as the daemon set it.
+        val effectiveArgs = if (args.packageScope != null) {
+            val outcome = consent.request(args.packageScope.toSet())
+            if (outcome.needsConsent) {
+                requestConsent(outcome.pending, outcome.generation)
+                consentPromptActive = true
+            } else if (consentPromptActive) {
+                // A re-configure that no longer widens (e.g. the daemon narrowed) makes a live
+                // prompt moot — take it down and re-enable actuation.
+                dismissConsent()
+                consentPromptActive = false
+            }
+            args.copy(packageScope = outcome.effective.toList())
+        } else {
+            args
+        }
+        val cfg = session.apply(effectiveArgs)
         settle.applySession(cfg.settle)
         onConfigApplied(cfg)
         return okRes(req.id, buildJsonObject { put("applied", true) })
@@ -163,6 +238,16 @@ class CommandRouter(
 
     private fun act(req: Req): Res {
         val args = Wire.json.decodeFromJsonElement(ActArgs.serializer(), req.args)
+        // Self-approval guard (§13): a coordinate GESTURE is the only actuation that isn't bound to
+        // an in-scope node, so it's the only way the daemon could tap the consent modal's "Allow".
+        // While a prompt is live, suppress it and tell the daemon to retry once the operator decides.
+        if (args.action == "GESTURE" && consentPromptActive) {
+            throw DeviceError(
+                ErrorCode.RATE_LIMITED,
+                "gesture suppressed while awaiting operator consent",
+                retryAfterMs = 500,
+            )
+        }
         val pkgScope = session.get().packageScope
         val needsNode = args.action != "GESTURE" && args.action != "GLOBAL"
         val resolved = if (needsNode) resolver.resolve(args.target, pkgScope) else null

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import com.jaato.a11ybridge.act.Actuator
 import com.jaato.a11ybridge.act.Resolver
@@ -55,6 +56,7 @@ class BridgeAccessibilityService : AccessibilityService(), WsClient.Listener {
     private lateinit var windowLister: WindowLister
     private lateinit var ws: WsClient
     private lateinit var router: CommandRouter
+    private lateinit var consentOverlay: ConsentOverlay
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -77,6 +79,7 @@ class BridgeAccessibilityService : AccessibilityService(), WsClient.Listener {
         ws = WsClient(scope, ::daemonConfig, this)
         capturer = ScreenshotCapturer(this, walker, resolver, session, ws::sendBinary)
         windowLister = WindowLister(this)
+        consentOverlay = ConsentOverlay(this)
         router = CommandRouter(
             scope = scope,
             session = session,
@@ -91,6 +94,8 @@ class BridgeAccessibilityService : AccessibilityService(), WsClient.Listener {
             activityProvider = { currentActivity },
             screenProvider = ::screen,
             onConfigApplied = ::onConfigApplied,
+            requestConsent = ::raiseConsentPrompt,
+            dismissConsent = ::takeDownConsentPrompt,
         )
 
         // Software-only scoping: receive events/windows for ALL packages (packageNames=null)
@@ -124,6 +129,53 @@ class BridgeAccessibilityService : AccessibilityService(), WsClient.Listener {
             ws.stop(byeFrame = byeEvent("user_disconnect"))
             BridgeStatus.set(BridgeStatus.Conn.DISCONNECTED)
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Consent (device design §13) — operator authorization for scope widenings.
+    // Called from the notification actions ([ConsentReceiver]) and the console ([MainActivity]).
+    // -----------------------------------------------------------------------
+
+    /** Operator allowed the pending widening [generation]. */
+    fun onConsentApprove(generation: Int) {
+        if (::router.isInitialized) router.approveConsent(generation)
+    }
+
+    /** Operator denied the pending widening [generation]. */
+    fun onConsentDeny(generation: Int) {
+        if (::router.isInitialized) router.denyConsent(generation)
+    }
+
+    /** Operator revoked all controller access from the console. */
+    fun onRevokeConsent() {
+        if (::router.isInitialized) router.revokeConsent()
+    }
+
+    /**
+     * Raise the consent prompt. The invasive center-screen overlay (Option A) is used when the
+     * operator has granted the draw-over-apps permission; until then we fall back to the heads-up
+     * notification — an honest lesser surface, and the tap target to go enable the overlay.
+     */
+    private fun raiseConsentPrompt(pending: Set<String>, generation: Int) {
+        if (Settings.canDrawOverlays(this)) {
+            consentOverlay.show(pending, generation, onAllow = ::onConsentApprove, onDeny = ::onConsentDeny)
+        } else {
+            ConsentNotifier.prompt(this, pending, generation)
+        }
+    }
+
+    /** Take down whichever consent surface is showing (decision made / session reset). */
+    private fun takeDownConsentPrompt() {
+        if (::consentOverlay.isInitialized) consentOverlay.hide()
+        ConsentNotifier.dismiss(this)
+    }
+
+    /**
+     * The daemon URL/token changed — this is a different controller, so the standing grant is
+     * void and every app must be re-approved.
+     */
+    fun onDaemonSettingsChanged() {
+        if (::router.isInitialized) router.revokeConsent()
     }
 
     // -----------------------------------------------------------------------
@@ -303,6 +355,9 @@ class BridgeAccessibilityService : AccessibilityService(), WsClient.Listener {
             runCatching { scope.cancel() }
         }
         BridgeStatus.set(BridgeStatus.Conn.DISCONNECTED)
+        // The in-memory consent grant dies with the service; take down any live prompt with it.
+        runCatching { if (::consentOverlay.isInitialized) consentOverlay.hide() }
+        runCatching { ConsentNotifier.dismiss(this) }
         runCatching { BridgeForegroundService.stop(this) }
     }
 
