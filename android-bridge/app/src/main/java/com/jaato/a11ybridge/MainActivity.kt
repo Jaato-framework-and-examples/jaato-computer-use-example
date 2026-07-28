@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -33,6 +34,7 @@ class MainActivity : Activity() {
     private lateinit var tokenField: EditText
     private lateinit var connectBtn: Button
     private lateinit var disconnectBtn: Button
+    private lateinit var overlayBtn: Button
 
     private val handler = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
@@ -87,11 +89,15 @@ class MainActivity : Activity() {
         root.addView(Button(this).apply {
             text = "Save"
             setOnClickListener {
-                Prefs.save(
-                    this@MainActivity,
-                    urlField.text.toString().trim(),
-                    tokenField.text.toString().trim(),
-                )
+                val newUrl = urlField.text.toString().trim()
+                val newToken = tokenField.text.toString().trim()
+                // A changed endpoint/token is a different controller → void the consent grant.
+                val controllerChanged = newUrl != Prefs.daemonUrl(this@MainActivity) ||
+                    newToken != Prefs.token(this@MainActivity)
+                Prefs.save(this@MainActivity, newUrl, newToken)
+                if (controllerChanged) {
+                    BridgeAccessibilityService.instance?.onDaemonSettingsChanged()
+                }
                 Toast.makeText(this@MainActivity, "Saved", Toast.LENGTH_SHORT).show()
                 updateStatus()
             }
@@ -124,6 +130,35 @@ class MainActivity : Activity() {
             text = "Open Accessibility settings"
             setOnClickListener {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        })
+
+        // Center-screen consent modal needs the draw-over-other-apps grant; without it the prompt
+        // degrades to a heads-up notification. This button deep-links to the system toggle and
+        // reflects the current grant (updated in updateStatus()).
+        overlayBtn = Button(this).apply {
+            setOnClickListener {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName"),
+                    ),
+                )
+            }
+        }
+        root.addView(overlayBtn)
+
+        // Revoke all standing consent: the live scope collapses to nothing immediately, and the
+        // controller must re-request (and the operator re-approve) each app (device design §13).
+        root.addView(Button(this).apply {
+            text = "Revoke controller access"
+            setOnClickListener {
+                BridgeAccessibilityService.instance?.onRevokeConsent()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Controller access revoked — apps must be re-approved.",
+                    Toast.LENGTH_SHORT,
+                ).show()
             }
         })
 
@@ -176,6 +211,15 @@ class MainActivity : Activity() {
         // Exactly one of the two buttons is actionable given the current desire.
         connectBtn.isEnabled = !desired
         disconnectBtn.isEnabled = desired
+
+        // Consent-prompt surface: overlay when granted, else heads-up notification.
+        if (Settings.canDrawOverlays(this)) {
+            overlayBtn.text = "✓ Center-screen consent prompt enabled"
+            overlayBtn.isEnabled = false
+        } else {
+            overlayBtn.text = "Enable center-screen consent prompt"
+            overlayBtn.isEnabled = true
+        }
 
         statusView.text = when {
             !configured -> "Not configured — enter a daemon URL and token."
