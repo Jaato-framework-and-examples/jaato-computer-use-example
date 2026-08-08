@@ -16,7 +16,7 @@ driven through client-provided (**host**) tools rather than a bespoke runtime.
  ┌───────────────── this process (run_controller.py) ─────────────────┐
  │                                                                    │
  │   IPCClient ──► jaato daemon ──► doubleword / Qwen3-VL              │
- │      ▲   │         (profile: a11y-controller, pass:// key)          │
+ │      ▲   │         (profile: a11y-controller, env-var key)         │
  │      │   │                                                          │
  │  TURN_   │ register_client_tools([screen_tap, screen_type, ...])    │
  │  COMPLETED   send_message(tree + set-of-marks PNG)                  │
@@ -67,9 +67,22 @@ controller reads:
 
 - **`.jaato/profiles/a11y-controller.yaml`** — the LLM (jaato *profile*, read by
   the daemon): provider `doubleword`, model `Qwen/Qwen3-VL-235B-A22B-Instruct-FP8`,
-  key via `plugin_configs.doubleword.api_key: pass://jaato/doubleword/api-key`
-  (resolved daemon-side; never a literal). No `.env`. Lives in `.jaato/` because
-  the framework owns it.
+  key via `plugin_configs.doubleword.api_key: "${JAATO_DOUBLEWORD_API_KEY}"`
+  (env-var interpolation). Set that var in `controller/.env` (git-ignored; copy
+  `controller/.env.example`) — `run_controller.py` forwards it to the daemon via
+  `env_file`. Lives in `.jaato/` because the framework owns the profile.
+
+  > ⚠️ **`pass://` needs jaato-premium.** This profile used to reference the key
+  > as `api_key: "pass://jaato/doubleword/api-key"`. That secret-URI scheme is
+  > served by a resolver registered through the `jaato.premium` entry point,
+  > which ships only in the private **jaato-premium** package. On a public
+  > checkout it fails **silently**: jaato logs a warning and then sends the
+  > literal `pass://…` string to the provider *as the API key*, so you get an
+  > auth error that never mentions secret resolution (and `jaato-scaffold
+  > validate` still passes). The `${JAATO_DOUBLEWORD_API_KEY}` form above avoids
+  > that; if you have jaato-premium, `pass://` keeps the key out of the workspace
+  > entirely. See the
+  > [org-wide note](https://github.com/Jaato-framework-and-examples/.github/blob/main/profile/README.md#-providers-and-api-keys-in-these-examples--read-this-first).
 - **`a11y-bridge.yaml`** (workspace root) — the controller's OWN config, read only
   by `a11y/config.py`: the device-facing listener host/port/path, bearer auth,
   **`device.package_scope`** (REQUIRED non-empty — an empty scope keeps the device
@@ -101,8 +114,8 @@ The audit trail lands in `.jaato/logs/a11y-audit.jsonl`.
   handshake + `pv`, configure, observe + binary-screenshot reunion, set-of-marks,
   act → settle → re-observe, SET_TEXT, audit trail.
 - **jaato/LLM side** — `python tools/jaato_connect_smoke.py`: fresh-daemon
-  autostart, `a11y-controller` profile + `pass://` key resolution, host-tool
-  dispatch by the vision model.
+  autostart, `a11y-controller` profile + `${JAATO_DOUBLEWORD_API_KEY}` key
+  resolution, host-tool dispatch by the vision model.
 - **Real hardware** — validated end-to-end: driven a physical Samsung tablet
   (Android 16 / sdk 36) through the computer-use loop over the live WS bridge —
   e.g. locating and opening an app nested inside a home-screen folder, each action

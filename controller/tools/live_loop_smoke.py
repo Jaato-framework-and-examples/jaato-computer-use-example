@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end proof: the REAL gemini agent drives a MOCK device through the actual
 run_controller loop. No physical hardware — a scripted 2-screen device stands in,
-but everything else is real (jaato daemon, a11y-controller profile, pass:// key,
+but everything else is real (jaato daemon, a11y-controller profile, env-var key,
 host tools, set-of-marks vision grounding, DeviceSession, Controller).
 
 Scenario: screen 1 has a 'Go' button; tapping it advances to a 'Success' screen;

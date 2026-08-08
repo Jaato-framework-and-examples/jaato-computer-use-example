@@ -350,8 +350,10 @@ async def run(initial_task: Optional[str], socket: str,
             emit("[error] the model session failed to start"
                  + (f": {detail}" if detail else "")
                  + (f" [{etype}]" if etype else "") + ".")
-            emit("  Most often the provider API key didn't resolve — if it's a pass://")
-            emit("  secret, its gpg key is likely locked; unlock it once and relaunch:")
+            emit("  Most often the provider API key didn't resolve. The profile reads")
+            emit("  ${JAATO_DOUBLEWORD_API_KEY} — set it in controller/.env (copy")
+            emit("  controller/.env.example). If instead you use a pass:// secret (needs")
+            emit("  jaato-premium), its gpg key is likely locked; unlock once and relaunch:")
             emit("    pass show jaato/<provider>/api-key >/dev/null   (e.g. .../doubleword/api-key)")
             emit("  Otherwise check provider auth (jaato-doctor). Full detail in the daemon log.")
             return 1
