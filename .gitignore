@@ -18,6 +18,14 @@ venv/
 .pytest_cache/
 *.egg-info/
 
+# --- Credentials: NEVER commit ---
+# The controller reads JAATO_DOUBLEWORD_API_KEY from controller/.env
+# (forwarded to the daemon via env_file). Keep the live key out of git;
+# commit controller/.env.example as the template instead.
+.env
+**/.env
+!**/.env.example
+
 # --- Signing secrets: NEVER commit ---
 *.jks
 *.keystore

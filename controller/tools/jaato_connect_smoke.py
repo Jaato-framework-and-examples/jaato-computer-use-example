@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify the jaato half of the controller: autostart a fresh daemon, resolve the
-pass:// key daemon-side via the a11y-controller profile, register a host tool,
+resolves the ${JAATO_DOUBLEWORD_API_KEY} env-var key via the a11y-controller profile, register a host tool,
 and confirm the model can call it. No Android device involved.
 
 Run:  python tools/jaato_connect_smoke.py
@@ -45,7 +45,7 @@ async def main() -> int:
         print("FAIL: create_session — check provider auth / daemon log")
         await client.disconnect()
         return 1
-    print(f"✓ session created with profile a11y-controller (pass:// key resolved daemon-side): {sid}")
+    print(f"✓ session created with profile a11y-controller (env-var key resolved from JAATO_DOUBLEWORD_API_KEY): {sid}")
 
     turn_done = asyncio.Event()
     client.subscribe(EventType.TURN_COMPLETED, lambda ev: turn_done.set())

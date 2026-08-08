@@ -16,8 +16,13 @@ model: Qwen/Qwen3-VL-235B-A22B-Instruct-FP8
 
 plugin_configs:
   doubleword:
-    # Resolved daemon-side from the user's pass store — never a literal key here.
-    api_key: pass://jaato/doubleword/api-key
+    # Env-var interpolation (public-checkout friendly): set JAATO_DOUBLEWORD_API_KEY
+    # in the controller's .env (git-ignored) — run_controller.py forwards it to the
+    # daemon via env_file. This used to be `pass://jaato/doubleword/api-key`, but
+    # that secret-URI scheme is resolved only by the private jaato-premium package
+    # and fails SILENTLY on a public checkout (the literal URI is sent as the key).
+    # If you have jaato-premium, `pass://` is the nicer pattern. See README.
+    api_key: "${JAATO_DOUBLEWORD_API_KEY}"
     # doubleword's /v1/models doesn't report a context length and the provider
     # refuses to guess (no-fallback rule), so pin the model's native 256K.
     context_length: 262144
